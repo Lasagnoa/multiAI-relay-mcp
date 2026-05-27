@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "multiai-relay-mcp"
-version = "1.0.5"
+version = "1.0.6"
 description = "Claude and Codex collaborate via MCP — shared state, handoff, and session relay"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -22,10 +22,6 @@ classifiers = [
 ]
 dependencies = ["mcp[cli]>=1.0.0"]
 
-[project.urls]
-Homepage = "https://github.com/Lasagnoa/multiAI-relay-mcp"
-Repository = "https://github.com/Lasagnoa/multiAI-relay-mcp"
-Issues = "https://github.com/Lasagnoa/multiAI-relay-mcp/issues"
 
 [project.scripts]
 multiai-relay-mcp = "multiai_relay_mcp.server:main"

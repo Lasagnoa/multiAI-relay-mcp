@@ -1265,7 +1265,7 @@ def _print_help(version_only: bool = False) -> None:
 
 
 
-_VERSION = "1.0.5"
+_VERSION = "1.0.6"
 
 # ヘルプテキスト（AIが読むことを想定して日本語で詳述）
 _HELP_TEXT = f"""\
