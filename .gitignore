@@ -18,6 +18,14 @@ build/
 venv/
 .env
 
+# 認証情報・シークレット（絶対にコミットしない）
+.pypirc
+*.pypirc
+*_token.txt
+*_secret.txt
+secrets.*
+credentials.*
+
 # エディタ・OS
 .DS_Store
 Thumbs.db

@@ -52,6 +52,27 @@ MODE_LABELS: dict[str, str] = {
     "debug":     "デバッグ",
 }
 
+# 入力文字列の最大長（プロンプトインジェクション・状態肥大化対策）
+_MAX_INPUT_LEN = 2000
+
+# 状態ファイルの必須キーとデフォルト値（スキーマ検証・補完用）
+_STATE_DEFAULTS: dict = {
+    "version":                 "1.0",
+    "project_name":            "不明",
+    "current_ai":              "claude",
+    "mode":                    "implement",
+    "session_count":           1,
+    "last_updated":            "",
+    "current_task":            None,
+    "completed_tasks":         [],
+    "notes":                   [],
+    "key_decisions":           [],
+    "known_issues":            [],
+    "resolved_issues":         [],
+    "pending_tasks":           [],
+    "completed_pending_tasks": [],
+}
+
 #endregion
 
 #region MCPサーバーインスタンス
@@ -104,6 +125,19 @@ def _load_state() -> dict:
     with open(sf, "r", encoding="utf-8") as f:
         state = json.load(f)
 
+    # スキーマ検証: 必須キーの存在確認とデフォルト値での補完
+    for key, default in _STATE_DEFAULTS.items():
+        if key not in state:
+            state[key] = default
+        elif isinstance(default, list) and not isinstance(state[key], list):
+            # リスト型が期待されるキーが別の型になっていた場合はリセット
+            state[key] = []
+        elif isinstance(default, int) and not isinstance(state[key], int):
+            try:
+                state[key] = int(state[key])
+            except (ValueError, TypeError):
+                state[key] = default
+
     # known_issues: 旧フォーマット（文字列）を構造化dictに移行
     migrated_issues = []
     for i, issue in enumerate(state.get("known_issues", [])):
@@ -124,6 +158,7 @@ class _StateLock:
     """
     AI_STATE.json の簡易ファイルロック。
     Claude と Codex が同時に read-modify-write する際のデータ消失を防ぐ。
+    ロックファイルに PID を書き込み、スタール解除時に所有者を確認する。
     クラッシュ後に残ったロックファイルは STALE_SEC 秒後に自動解除する。
     """
     _TIMEOUT_SEC = 10  # ロック取得タイムアウト
@@ -132,20 +167,37 @@ class _StateLock:
     def __init__(self, sf: Path):
         self._lock = sf.with_suffix(".lock")
 
+    def _read_lock_pid(self) -> int | None:
+        """ロックファイルに記録されたPIDを読む。読めない場合は None を返す"""
+        try:
+            text = self._lock.read_text(encoding="utf-8").strip()
+            return int(text) if text.isdigit() else None
+        except OSError:
+            return None
+
     def __enter__(self) -> "_StateLock":
         deadline = time.monotonic() + self._TIMEOUT_SEC
+        my_pid = os.getpid()
         while time.monotonic() < deadline:
             try:
                 # exist_ok=False → 排他的作成（ほぼアトミック）
                 self._lock.touch(exist_ok=False)
+                # PIDを書き込んで所有者を記録する
+                try:
+                    self._lock.write_text(str(my_pid), encoding="utf-8")
+                except OSError:
+                    pass
                 return self
             except FileExistsError:
-                # スタールロックを検出したら強制解除
+                # スタールロックを検出したら PID を確認してから解除
                 try:
                     age = time.time() - self._lock.stat().st_mtime
                     if age > self._STALE_SEC:
-                        self._lock.unlink(missing_ok=True)
-                        continue
+                        lock_pid = self._read_lock_pid()
+                        # 自分のPIDでない古いロック（または所有者不明）のみ解除
+                        if lock_pid != my_pid:
+                            self._lock.unlink(missing_ok=True)
+                            continue
                 except OSError:
                     pass
                 time.sleep(0.05)
@@ -155,7 +207,10 @@ class _StateLock:
         )
 
     def __exit__(self, *_) -> None:
-        self._lock.unlink(missing_ok=True)
+        # 自分のPIDのロックのみ削除（他プロセスが上書きした場合は削除しない）
+        lock_pid = self._read_lock_pid()
+        if lock_pid is None or lock_pid == os.getpid():
+            self._lock.unlink(missing_ok=True)
 
 
 def _save_state(state: dict) -> None:
@@ -194,8 +249,23 @@ def _state_transaction():
         _save_state(state)
 
 
+def _write_atomic(path: Path, content: str) -> None:
+    """テキストファイルを一時ファイル経由で原子的に書き込む（クラッシュ時の破損防止）"""
+    tmp_fd, tmp_path = tempfile.mkstemp(dir=path.parent, suffix=".tmp")
+    try:
+        with os.fdopen(tmp_fd, "w", encoding="utf-8") as f:
+            f.write(content)
+        os.replace(tmp_path, path)
+    except Exception:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
+
+
 def _append_session_log(ai_name: str, message: str) -> None:
-    """現在のセッションログに1行追記する"""
+    """現在のセッションログに1行追記する。失敗時は握り潰さず警告を出す"""
     sd = _sessions_dir()
     if not sd.exists():
         return
@@ -203,11 +273,17 @@ def _append_session_log(ai_name: str, message: str) -> None:
     if not logs:
         return
     time_str = datetime.datetime.now().strftime("%H:%M:%S")
-    with open(logs[0], "a", encoding="utf-8") as f:
-        f.write(f"- [{time_str}] [MCP] {message}\n")
+    try:
+        with open(logs[0], "a", encoding="utf-8") as f:
+            f.write(f"- [{time_str}] [MCP] {message}\n")
+    except OSError as e:
+        # セッションログへの追記失敗は致命的ではないが記録する
+        import warnings
+        warnings.warn(f"セッションログへの追記に失敗しました: {logs[0]}: {e}", stacklevel=2)
+
 
 def _create_session_log(ai_name: str, session_number: int, mode: str) -> None:
-    """新しいセッションログファイルを作成する"""
+    """新しいセッションログファイルを原子的に作成する"""
     sd = _sessions_dir()
     sd.mkdir(exist_ok=True)
     ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -218,8 +294,7 @@ def _create_session_log(ai_name: str, session_number: int, mode: str) -> None:
         f"**モード:** {MODE_LABELS.get(mode, mode)}\n"
         f"\n## 作業ログ\n"
     )
-    with open(sd / f"{ts}_{ai_name}.md", "w", encoding="utf-8") as f:
-        f.write(content)
+    _write_atomic(sd / f"{ts}_{ai_name}.md", content)
 
 #endregion
 
@@ -241,6 +316,10 @@ def collab_switch_project(project_path: str, project_name: str = "") -> str:
         project_name: 新規作成時のプロジェクト名。既存プロジェクトでは無視される。
     """
     global _current_project
+
+    # 絶対パスであることを確認（相対パスによるディレクトリトラバーサルを防ぐ）
+    if not Path(project_path).is_absolute():
+        return f"エラー: 絶対パスを指定してください（相対パスは不可）: {project_path}"
 
     path = Path(project_path).resolve()
 
@@ -428,6 +507,8 @@ def collab_add_note(message: str) -> str:
     Args:
         message: メモの内容
     """
+    if len(message) > _MAX_INPUT_LEN:
+        return f"エラー: 入力が長すぎます（最大{_MAX_INPUT_LEN}文字、現在{len(message)}文字）。"
     with _state_transaction() as state:
         state["notes"].append({"timestamp": _now_iso(), "ai": state["current_ai"], "text": message})
         ai = state["current_ai"]
@@ -444,6 +525,10 @@ def collab_record_decision(title: str, content: str) -> str:
         title: 決定事項のタイトル
         content: 決定内容と理由
     """
+    if len(title) > _MAX_INPUT_LEN:
+        return f"エラー: title が長すぎます（最大{_MAX_INPUT_LEN}文字）。"
+    if len(content) > _MAX_INPUT_LEN:
+        return f"エラー: content が長すぎます（最大{_MAX_INPUT_LEN}文字）。"
     with _state_transaction() as state:
         state["key_decisions"].append({
             "timestamp": _now_iso(), "ai": state["current_ai"],
@@ -457,6 +542,8 @@ def collab_record_decision(title: str, content: str) -> str:
 @mcp.tool()
 def collab_record_issue(message: str) -> str:
     """既知の問題・バグ・注意点を記録する。"""
+    if len(message) > _MAX_INPUT_LEN:
+        return f"エラー: 入力が長すぎます（最大{_MAX_INPUT_LEN}文字、現在{len(message)}文字）。"
     with _state_transaction() as state:
         # 既存・解決済み両方のIDを参照して単調増加IDを採番
         all_issues = state.get("known_issues", []) + state.get("resolved_issues", [])
@@ -635,9 +722,8 @@ def collab_generate_handoff(to_ai: str) -> str:
 
     with _state_transaction() as state:
         from_ai = state["current_ai"]
-        # ハンドオフ文書はロック内で生成（状態と内容の一貫性を保つ）
-        with open(_handoff_file(), "w", encoding="utf-8") as f:
-            f.write(_build_handoff(state, from_ai, to_ai))
+        # ハンドオフ文書はロック内で原子的に生成（状態と内容の一貫性を保つ）
+        _write_atomic(_handoff_file(), _build_handoff(state, from_ai, to_ai))
         state["current_ai"]    = to_ai
         state["session_count"] += 1
         new_session = state["session_count"]
@@ -669,8 +755,7 @@ def collab_checkpoint(message: str, to_ai: str = "") -> str:
         if target_ai not in VALID_AI:
             return "エラー: AIは 'claude' または 'codex' を指定してください。"
         state["notes"].append({"timestamp": _now_iso(), "ai": from_ai, "text": message})
-        with open(_handoff_file(), "w", encoding="utf-8") as f:
-            f.write(_build_handoff(state, from_ai, target_ai))
+        _write_atomic(_handoff_file(), _build_handoff(state, from_ai, target_ai))
         state["current_ai"] = target_ai
         state["session_count"] += 1
         new_session = state["session_count"]
@@ -717,12 +802,13 @@ def _build_handoff(state: dict, from_ai: str, to_ai: str) -> str:
     lines += section("保留中のタスク",
         [f"- [ ] {t['title']}" + (f" — {t['description']}" if t.get("description") else "")
          for t in state.get("pending_tasks", [])])
+    # 外部入力（ユーザーが記録した内容）はタグで囲んで信頼済み指示と区別する
     notes = state.get("notes", [])
     note_lines = []
     if len(notes) > 10:
         note_lines.append(f"- *過去{len(notes) - 10}件のメモを省略*")
     note_lines += [
-        f"- `{n['timestamp'][:16]}` ({n['ai'].upper()}) {n['text']}"
+        f"- `{n['timestamp'][:16]}` ({n['ai'].upper()}) <!-- USER INPUT -->{n['text']}<!-- /USER INPUT -->"
         for n in notes[-10:]
     ]
     lines += section("最近のメモ（最新10件）", note_lines)
@@ -734,15 +820,22 @@ def _build_handoff(state: dict, from_ai: str, to_ai: str) -> str:
             lines.append(f"*過去{len(decisions) - 10}件の決定事項を省略*")
             lines.append("")
         for dec in decisions[-10:]:
-            lines += [f"### {dec['title']}", f"*{dec['timestamp'][:10]}  by {dec['ai'].upper()}*",
-                      "", dec["content"], ""]
+            lines += [
+                f"### <!-- USER INPUT -->{dec['title']}<!-- /USER INPUT -->",
+                f"*{dec['timestamp'][:10]}  by {dec['ai'].upper()}*",
+                "",
+                "<!-- USER INPUT -->",
+                dec["content"],
+                "<!-- /USER INPUT -->",
+                "",
+            ]
     else:
         lines += ["", "---", "", "## 重要な決定事項", "", "*なし*"]
 
     def _fmt_issue(iss) -> str:
         if isinstance(iss, dict):
-            return f"- ⚠️ [{iss['id']}] {iss['text']}"
-        return f"- ⚠️ {iss}"
+            return f"- ⚠️ [{iss['id']}] <!-- USER INPUT -->{iss['text']}<!-- /USER INPUT -->"
+        return f"- ⚠️ <!-- USER INPUT -->{iss}<!-- /USER INPUT -->"
 
     lines += section("既知の問題・注意点",
         [_fmt_issue(i) for i in state.get("known_issues", [])])
@@ -884,9 +977,12 @@ def collab_consult(ai: str, question: str, save_result: bool = True) -> str:
     """
     if ai not in VALID_AI:
         return f"エラー: ai は 'claude' または 'codex' を指定してください。"
+    if len(question) > _MAX_INPUT_LEN:
+        return f"エラー: question が長すぎます（最大{_MAX_INPUT_LEN}文字、現在{len(question)}文字）。"
 
     response = _call_ai_cli(ai, _build_consult_prompt(question))
 
+    save_failed = False
     if save_result:
         try:
             short_q = question[:60] + ("…" if len(question) > 60 else "")
@@ -899,9 +995,12 @@ def collab_consult(ai: str, question: str, save_result: bool = True) -> str:
                 caller_ai = state["current_ai"]
             _append_session_log(caller_ai, f"{ai.upper()}CLIへの相談: {short_q}")
         except Exception:
-            pass
+            save_failed = True
 
-    return f"【{ai.upper()} CLI の回答】\n\n{response}"
+    result = f"【{ai.upper()} CLI の回答】\n\n{response}"
+    if save_failed:
+        result += "\n\n⚠️ メモへの保存に失敗しました"
+    return result
 
 
 @mcp.tool()
@@ -917,6 +1016,8 @@ def collab_discuss(ai: str, topic: str, rounds: int = 2) -> str:
     """
     if ai not in VALID_AI:
         return f"エラー: ai は 'claude' または 'codex' を指定してください。"
+    if len(topic) > _MAX_INPUT_LEN:
+        return f"エラー: topic が長すぎます（最大{_MAX_INPUT_LEN}文字、現在{len(topic)}文字）。"
 
     rounds = min(max(rounds, 1), 4)
     history: list[dict] = []
@@ -940,6 +1041,7 @@ def collab_discuss(ai: str, topic: str, rounds: int = 2) -> str:
         result_lines += [f"### ラウンド {j} — {h['speaker']}", "", h["text"], ""]
     result = "\n".join(result_lines)
 
+    save_failed = False
     try:
         short_topic = topic[:60] + ("…" if len(topic) > 60 else "")
         with _state_transaction() as state:
@@ -951,8 +1053,10 @@ def collab_discuss(ai: str, topic: str, rounds: int = 2) -> str:
             caller_ai = state["current_ai"]
         _append_session_log(caller_ai, f"{ai.upper()}CLIとの議論: {short_topic}")
     except Exception:
-        pass
+        save_failed = True
 
+    if save_failed:
+        result += "\n⚠️ メモへの保存に失敗しました"
     return result
 
 
@@ -968,6 +1072,24 @@ def collab_setup_cli(ai: str, command: str, args_before: list[str] = [], args_af
         args_before: プロンプトの前に渡す引数
         args_after: プロンプトの後に渡す引数
     """
+    # ai の検証
+    if ai not in VALID_AI:
+        return f"エラー: ai は 'claude' または 'codex' を指定してください。"
+
+    # command の検証: ファイル名のステム（拡張子なし）が VALID_AI に含まれるもののみ許可
+    cmd_stem = Path(command).stem.lower()
+    if cmd_stem not in VALID_AI:
+        return (
+            f"エラー: command に設定できるのは 'claude' または 'codex' の実行ファイルのみです。\n"
+            f"指定値: {command}（ファイル名: {cmd_stem}）"
+        )
+
+    # args の型検証
+    if not isinstance(args_before, list):
+        args_before = []
+    if not isinstance(args_after, list):
+        args_after = []
+
     cfg_file = _cli_config_file()
     config = {}
     if cfg_file.exists():
@@ -975,8 +1097,7 @@ def collab_setup_cli(ai: str, command: str, args_before: list[str] = [], args_af
             config = json.load(f)
 
     config[ai] = {"command": command, "args_before": args_before, "args_after": args_after}
-    with open(cfg_file, "w", encoding="utf-8") as f:
-        json.dump(config, f, ensure_ascii=False, indent=2)
+    _write_atomic(cfg_file, json.dumps(config, ensure_ascii=False, indent=2))
 
     path = _resolve_cli_path(ai, command)
     status = f"見つかりました: {path}" if path else "⚠ 見つかりません。パスを確認してください。"
