@@ -28,11 +28,10 @@
 ```toml
 [mcp_servers.multiai-relay-mcp]
 command = 'uvx'
-args = ['--from', 'D:\path\to\multiAI-relay-mcp', 'multiai-relay-mcp']
+args = ['--index-url', 'https://test.pypi.org/simple/', '--extra-index-url', 'https://pypi.org/simple/', 'multiai-relay-mcp']
 ```
 
 > `uvx` のフルパスが必要な場合は `where uvx`（Windows）または `which uvx`（Mac/Linux）で確認。
-> `--from` の値は本リポジトリをクローンしたパスに変更してください。
 > 追加後は Codex Desktop を再起動。
 
 ---

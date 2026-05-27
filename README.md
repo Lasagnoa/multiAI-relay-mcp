@@ -20,38 +20,31 @@ Claude Desktop と Codex Desktop が MCP を通じて状態を共有し、セッ
 
 ### 前提条件
 
-- Python 3.11 以上
 - [uv](https://docs.astral.sh/uv/) がインストール済みであること
 - Claude Desktop または Codex Desktop
 
-### 1. リポジトリをクローン
-
-```sh
-git clone https://github.com/Lasagnoa/multiAI-relay-mcp.git
-```
-
-### 2. Claude Desktop の設定
+### 1. Claude Desktop の設定
 
 `%APPDATA%\Claude\claude_desktop_config.json` の `mcpServers` に追加:
 
 ```json
 "multiai-relay-mcp": {
   "command": "uvx",
-  "args": ["--from", "D:\\path\\to\\multiAI-relay-mcp", "multiai-relay-mcp"]
+  "args": ["--index-url", "https://test.pypi.org/simple/", "--extra-index-url", "https://pypi.org/simple/", "multiai-relay-mcp"]
 }
 ```
 
 > `uvx` のフルパスが必要な場合は `where uvx`（Windows）または `which uvx`（Mac/Linux）で確認。
 > 追加後は Claude Desktop を再起動。
 
-### 3. Codex Desktop の設定
+### 2. Codex Desktop の設定
 
 `~/.codex/config.toml` の末尾に追加:
 
 ```toml
 [mcp_servers.multiai-relay-mcp]
 command = 'uvx'
-args = ['--from', 'D:\path\to\multiAI-relay-mcp', 'multiai-relay-mcp']
+args = ['--index-url', 'https://test.pypi.org/simple/', '--extra-index-url', 'https://pypi.org/simple/', 'multiai-relay-mcp']
 ```
 
 > 追加後は Codex Desktop を再起動。
@@ -163,34 +156,28 @@ A collaborative development system that lets Claude Desktop and Codex Desktop sh
 - [uv](https://docs.astral.sh/uv/) installed
 - Claude Desktop and/or Codex Desktop
 
-### 1. Clone the repository
-
-```sh
-git clone https://github.com/Lasagnoa/multiAI-relay-mcp.git
-```
-
-### 2. Claude Desktop configuration
+### 1. Claude Desktop configuration
 
 Add to `%APPDATA%\Claude\claude_desktop_config.json` (Windows) or `~/Library/Application Support/Claude/claude_desktop_config.json` (Mac) under `mcpServers`:
 
 ```json
 "multiai-relay-mcp": {
   "command": "uvx",
-  "args": ["--from", "/path/to/multiAI-relay-mcp", "multiai-relay-mcp"]
+  "args": ["--index-url", "https://test.pypi.org/simple/", "--extra-index-url", "https://pypi.org/simple/", "multiai-relay-mcp"]
 }
 ```
 
 > Use `where uvx` (Windows) or `which uvx` (Mac/Linux) to find the full path if needed.
 > Restart Claude Desktop after editing.
 
-### 3. Codex Desktop configuration
+### 2. Codex Desktop configuration
 
 Add to `~/.codex/config.toml`:
 
 ```toml
 [mcp_servers.multiai-relay-mcp]
 command = 'uvx'
-args = ['--from', '/path/to/multiAI-relay-mcp', 'multiai-relay-mcp']
+args = ['--index-url', 'https://test.pypi.org/simple/', '--extra-index-url', 'https://pypi.org/simple/', 'multiai-relay-mcp']
 ```
 
 > Restart Codex Desktop after editing.
