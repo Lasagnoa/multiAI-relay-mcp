@@ -10,6 +10,7 @@ ClaudeとCodexが共通のツール群を通じて状態を共有するMCPサー
 プロジェクトフォルダ外への書き込みは一切行わない。
 """
 
+import copy
 import json
 import datetime
 import os
@@ -108,6 +109,43 @@ def _sessions_dir() -> Path: return _get_project_dir() / "ai_sessions"
 
 #region 内部ユーティリティ
 
+# HANDOFF.md の信頼境界タグ（このタグを含む入力は拒否する）
+_INJECTION_TAG = "<!-- /USER INPUT -->"
+
+def _validate_input(text: str, field: str = "入力", max_len: int = _MAX_INPUT_LEN) -> str | None:
+    """
+    入力文字列の長さとインジェクションタグを検証する。
+    問題があればエラーメッセージを返し、問題なければ None を返す。
+    """
+    if len(text) > max_len:
+        return f"エラー: {field}が長すぎます（最大{max_len}文字、現在{len(text)}文字）。"
+    if _INJECTION_TAG in text:
+        return f"エラー: {field}に使用できない文字列が含まれています。"
+    return None
+
+
+def _pid_exists(pid: int) -> bool:
+    """PIDが現在実行中かどうか確認する（クロスプラットフォーム対応）"""
+    if sys.platform == "win32":
+        # Windows: OpenProcess でハンドルが取れるか確認する
+        import ctypes
+        PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+        handle = ctypes.windll.kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+        if handle:
+            ctypes.windll.kernel32.CloseHandle(handle)
+            return True
+        return False
+    else:
+        # POSIX: シグナル0でプロセスの存在を確認する（実際にはシグナルを送らない）
+        try:
+            os.kill(pid, 0)
+            return True
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            return True  # プロセスは存在するがアクセス権がない
+
+
 def _now_iso() -> str:
     return datetime.datetime.now().isoformat(timespec="seconds")
 
@@ -128,7 +166,8 @@ def _load_state() -> dict:
     # スキーマ検証: 必須キーの存在確認とデフォルト値での補完
     for key, default in _STATE_DEFAULTS.items():
         if key not in state:
-            state[key] = default
+            # issue-005: copy.deepcopy でリストの可変デフォルトが別プロジェクトに漏洩するのを防ぐ
+            state[key] = copy.deepcopy(default)
         elif isinstance(default, list) and not isinstance(state[key], list):
             # リスト型が期待されるキーが別の型になっていた場合はリセット
             state[key] = []
@@ -136,7 +175,20 @@ def _load_state() -> dict:
             try:
                 state[key] = int(state[key])
             except (ValueError, TypeError):
-                state[key] = default
+                state[key] = copy.deepcopy(default)
+
+    # issue-011: 文字列フィールドの型検証（破損データでの AttributeError を防ぐ）
+    for str_key in ("version", "project_name", "last_updated"):
+        if not isinstance(state.get(str_key), str):
+            state[str_key] = str(state[str_key]) if state.get(str_key) is not None else _STATE_DEFAULTS[str_key]
+    # current_ai / mode は値域も検証する
+    if state.get("current_ai") not in VALID_AI:
+        state["current_ai"] = "claude"
+    if state.get("mode") not in VALID_MODES:
+        state["mode"] = "implement"
+    # current_task が dict 以外なら None にリセット
+    if state.get("current_task") is not None and not isinstance(state["current_task"], dict):
+        state["current_task"] = None
 
     # known_issues: 旧フォーマット（文字列）を構造化dictに移行
     migrated_issues = []
@@ -189,13 +241,18 @@ class _StateLock:
                     pass
                 return self
             except FileExistsError:
-                # スタールロックを検出したら PID を確認してから解除
+                # スタールロックを検出したら PID の生存を確認してから解除
                 try:
                     age = time.time() - self._lock.stat().st_mtime
                     if age > self._STALE_SEC:
                         lock_pid = self._read_lock_pid()
-                        # 自分のPIDでない古いロック（または所有者不明）のみ解除
+                        # 自分のPIDでないロックのみ対象
                         if lock_pid != my_pid:
+                            # issue-007: PID生存確認 — 生存中のプロセスのロックは奪わない
+                            if lock_pid is not None and _pid_exists(lock_pid):
+                                # 所有プロセスがまだ動いている → スタールではない
+                                time.sleep(0.05)
+                                continue
                             self._lock.unlink(missing_ok=True)
                             continue
                 except OSError:
@@ -482,6 +539,9 @@ def collab_set_task(title: str, description: str = "") -> str:
         title: タスクのタイトル
         description: タスクの詳細説明（省略可）
     """
+    err = _validate_input(title, "title") or (description and _validate_input(description, "description"))
+    if err:
+        return err
     with _state_transaction() as state:
         if state.get("current_task"):
             old = state["current_task"]
@@ -507,8 +567,9 @@ def collab_add_note(message: str) -> str:
     Args:
         message: メモの内容
     """
-    if len(message) > _MAX_INPUT_LEN:
-        return f"エラー: 入力が長すぎます（最大{_MAX_INPUT_LEN}文字、現在{len(message)}文字）。"
+    err = _validate_input(message, "message")
+    if err:
+        return err
     with _state_transaction() as state:
         state["notes"].append({"timestamp": _now_iso(), "ai": state["current_ai"], "text": message})
         ai = state["current_ai"]
@@ -525,10 +586,9 @@ def collab_record_decision(title: str, content: str) -> str:
         title: 決定事項のタイトル
         content: 決定内容と理由
     """
-    if len(title) > _MAX_INPUT_LEN:
-        return f"エラー: title が長すぎます（最大{_MAX_INPUT_LEN}文字）。"
-    if len(content) > _MAX_INPUT_LEN:
-        return f"エラー: content が長すぎます（最大{_MAX_INPUT_LEN}文字）。"
+    err = _validate_input(title, "title") or _validate_input(content, "content")
+    if err:
+        return err
     with _state_transaction() as state:
         state["key_decisions"].append({
             "timestamp": _now_iso(), "ai": state["current_ai"],
@@ -542,8 +602,9 @@ def collab_record_decision(title: str, content: str) -> str:
 @mcp.tool()
 def collab_record_issue(message: str) -> str:
     """既知の問題・バグ・注意点を記録する。"""
-    if len(message) > _MAX_INPUT_LEN:
-        return f"エラー: 入力が長すぎます（最大{_MAX_INPUT_LEN}文字、現在{len(message)}文字）。"
+    err = _validate_input(message, "message")
+    if err:
+        return err
     with _state_transaction() as state:
         # 既存・解決済み両方のIDを参照して単調増加IDを採番
         all_issues = state.get("known_issues", []) + state.get("resolved_issues", [])
@@ -667,6 +728,9 @@ def collab_add_pending_task(title: str, description: str = "") -> str:
         title: タスクのタイトル
         description: タスクの詳細説明（省略可）
     """
+    err = _validate_input(title, "title") or (description and _validate_input(description, "description"))
+    if err:
+        return err
     with _state_transaction() as state:
         task_numbers = [
             int(t["id"].split("-")[-1])
@@ -710,6 +774,36 @@ def collab_close_pending_task(task_id: str, note: str = "") -> str:
 
 
 @mcp.tool()
+def collab_complete_task(note: str = "") -> str:
+    """
+    現在のタスクを完了済みにして一覧から取り除く。
+
+    collab_set_task() で新タスクを作らずに現在タスクを完了させたい場合に使う。
+    完了後は current_task が未設定になる。
+
+    Args:
+        note: 完了時のメモ・備考（省略可）
+    """
+    if note:
+        err = _validate_input(note, "note")
+        if err:
+            return err
+    with _state_transaction() as state:
+        if not state.get("current_task"):
+            return "エラー: 現在のタスクが設定されていません。collab_set_task() で先にタスクを設定してください。"
+        task = state["current_task"]
+        task["completed_at"] = _now_iso()
+        task["completed_by"] = state["current_ai"]
+        if note:
+            task["completion_note"] = note
+        state["completed_tasks"].append(task)
+        state["current_task"] = None
+        ai = state["current_ai"]
+    _append_session_log(ai, f"タスク完了: [{task['id']}] {task['title']}")
+    return f"タスクを完了しました: [{task['id']}] {task['title']}"
+
+
+@mcp.tool()
 def collab_generate_handoff(to_ai: str) -> str:
     """
     ハンドオフドキュメントを生成して担当AIを切り替える。
@@ -749,6 +843,9 @@ def collab_checkpoint(message: str, to_ai: str = "") -> str:
         message: 引き継ぎに残す進捗・次の作業内容
         to_ai: 引き継ぎ先。"claude" / "codex"。省略時は現在担当でないAI。
     """
+    err = _validate_input(message, "message")
+    if err:
+        return err
     with _state_transaction() as state:
         from_ai = state["current_ai"]
         target_ai = to_ai or ("claude" if from_ai == "codex" else "codex")
@@ -787,9 +884,11 @@ def _build_handoff(state: dict, from_ai: str, to_ai: str) -> str:
 
     if state.get("current_task"):
         task = state["current_task"]
-        lines += [f"**タスクID:** `{task['id']}`", f"**タイトル:** {task['title']}"]
+        # issue-009: タスクタイトル/詳細もユーザー入力なのでタグでラップする
+        lines += [f"**タスクID:** `{task['id']}`",
+                  f"**タイトル:** <!-- USER INPUT -->{task['title']}<!-- /USER INPUT -->"]
         if task.get("description"):
-            lines.append(f"**詳細:** {task['description']}")
+            lines.append(f"**詳細:** <!-- USER INPUT -->{task['description']}<!-- /USER INPUT -->")
         lines.append(f"**開始:** {task['started_at'][:16]}  担当: {task.get('started_by', '?').upper()}")
         if task.get("files_modified"):
             lines += ["", "**変更済みファイル:**"] + [f"- `{fp}`" for fp in task["files_modified"]]
@@ -800,7 +899,8 @@ def _build_handoff(state: dict, from_ai: str, to_ai: str) -> str:
         return ["", "---", "", f"## {title}", ""] + (items if items else [empty])
 
     lines += section("保留中のタスク",
-        [f"- [ ] {t['title']}" + (f" — {t['description']}" if t.get("description") else "")
+        [f"- [ ] <!-- USER INPUT -->{t['title']}<!-- /USER INPUT -->"
+         + (f" — <!-- USER INPUT -->{t['description']}<!-- /USER INPUT -->" if t.get("description") else "")
          for t in state.get("pending_tasks", [])])
     # 外部入力（ユーザーが記録した内容）はタグで囲んで信頼済み指示と区別する
     notes = state.get("notes", [])
@@ -977,8 +1077,9 @@ def collab_consult(ai: str, question: str, save_result: bool = True) -> str:
     """
     if ai not in VALID_AI:
         return f"エラー: ai は 'claude' または 'codex' を指定してください。"
-    if len(question) > _MAX_INPUT_LEN:
-        return f"エラー: question が長すぎます（最大{_MAX_INPUT_LEN}文字、現在{len(question)}文字）。"
+    err = _validate_input(question, "question")
+    if err:
+        return err
 
     response = _call_ai_cli(ai, _build_consult_prompt(question))
 
@@ -1016,8 +1117,9 @@ def collab_discuss(ai: str, topic: str, rounds: int = 2) -> str:
     """
     if ai not in VALID_AI:
         return f"エラー: ai は 'claude' または 'codex' を指定してください。"
-    if len(topic) > _MAX_INPUT_LEN:
-        return f"エラー: topic が長すぎます（最大{_MAX_INPUT_LEN}文字、現在{len(topic)}文字）。"
+    err = _validate_input(topic, "topic")
+    if err:
+        return err
 
     rounds = min(max(rounds, 1), 4)
     history: list[dict] = []
@@ -1159,6 +1261,21 @@ def collab_search(query: str) -> str:
     if ct and (q in ct.get("title", "").lower() or q in ct.get("description", "").lower()):
         results.append(f"[タスク] [{ct['id']}] {ct['title']}")
 
+    # 完了済みタスク（issue-010: 検索漏れ修正）
+    for t in state.get("completed_tasks", []):
+        hit = (q in t.get("title", "").lower() or q in t.get("description", "").lower()
+               or q in t.get("completion_note", "").lower())
+        if not hit:
+            hit = any(q in fp.lower() for fp in t.get("files_modified", []))
+        if hit:
+            results.append(f"[完了タスク] [{t['id']}] {t['title']} ({t.get('completed_at', '?')[:10]})")
+
+    # 完了した保留タスク（issue-010: 検索漏れ修正）
+    for t in state.get("completed_pending_tasks", []):
+        if (q in t.get("title", "").lower() or q in t.get("description", "").lower()
+                or q in t.get("completion_note", "").lower()):
+            results.append(f"[完了保留] [{t['id']}] {t['title']} ({t.get('completed_at', '?')[:10]})")
+
     if not results:
         return f"「{query}」に一致する項目は見つかりませんでした。"
 
@@ -1265,7 +1382,7 @@ def _print_help(version_only: bool = False) -> None:
 
 
 
-_VERSION = "1.0.6"
+_VERSION = "1.0.7"
 
 # ヘルプテキスト（AIが読むことを想定して日本語で詳述）
 _HELP_TEXT = f"""\
@@ -1297,6 +1414,7 @@ MCPツール一覧（Claude Desktop / Codex Desktop から自動呼び出し）:
   collab_change_mode        モードを切り替える（plan / implement / review / debug）
   collab_add_pending_task   未着手タスクを追加する
   collab_close_pending_task 完了した保留タスクを一覧から取り除く
+  collab_complete_task      現在のタスクを完了済みにする（新タスクなしで完了させる場合）
   collab_generate_handoff   引き継ぎ文書（HANDOFF.md）を生成する
   collab_checkpoint         メモ追加と引き継ぎ文書生成を一度に行う
   collab_consult            相手AIのCLIを呼び出して質問・相談する

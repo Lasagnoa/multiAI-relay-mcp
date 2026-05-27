@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "multiai-relay-mcp"
-version = "1.0.6"
+version = "1.0.7"
 description = "Claude and Codex collaborate via MCP — shared state, handoff, and session relay"
 readme = "README.md"
 requires-python = ">=3.11"
