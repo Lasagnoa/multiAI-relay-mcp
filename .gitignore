@@ -1,4 +1,5 @@
-# ランタイム生成ファイル（プロジェクト固有・個人情報含む可能性あり）
+# ランタイム生成ファイル・一時出力（プロジェクト固有・個人情報含む可能性あり）
+codex_result.md
 AI_STATE.json
 AI_STATE.lock
 HANDOFF.md
