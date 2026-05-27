@@ -1,0 +1,273 @@
+# multiAI-relay-mcp
+
+**日本語** | [English](#english)
+
+Claude Desktop と Codex Desktop が MCP を通じて状態を共有し、セッションをまたいで作業を引き継げる協調開発システムです。
+
+---
+
+## 特徴
+
+- 🔁 **セッションリレー** — レートリミットや作業交代のタイミングで、担当 AI を切り替えながら作業を継続
+- 📝 **永続的な共有状態** — メモ・決定事項・タスク・既知の問題を `AI_STATE.json` に記録し、セッションをまたいで保持
+- 🔍 **横断検索** — メモ・決定・問題・タスクをキーワードで一括検索
+- 🔒 **安全な並行書き込み** — ファイルロック＋アトミック書き込みで、Claude/Codex が同時に更新しても状態が壊れない
+- 📦 **プロジェクトフォルダ外への書き込みゼロ** — ホームディレクトリを汚さない
+
+---
+
+## セットアップ
+
+### 前提条件
+
+- Python 3.11 以上
+- [uv](https://docs.astral.sh/uv/) がインストール済みであること
+- Claude Desktop または Codex Desktop
+
+### 1. リポジトリをクローン
+
+```sh
+git clone https://github.com/Lasagnoa/multiAI-relay-mcp.git
+```
+
+### 2. Claude Desktop の設定
+
+`%APPDATA%\Claude\claude_desktop_config.json` の `mcpServers` に追加:
+
+```json
+"multiai-relay-mcp": {
+  "command": "uvx",
+  "args": ["--from", "D:\\path\\to\\multiAI-relay-mcp", "multiai-relay-mcp"]
+}
+```
+
+> `uvx` のフルパスが必要な場合は `where uvx`（Windows）または `which uvx`（Mac/Linux）で確認。
+> 追加後は Claude Desktop を再起動。
+
+### 3. Codex Desktop の設定
+
+`~/.codex/config.toml` の末尾に追加:
+
+```toml
+[mcp_servers.multiai-relay-mcp]
+command = 'uvx'
+args = ['--from', 'D:\path\to\multiAI-relay-mcp', 'multiai-relay-mcp']
+```
+
+> 追加後は Codex Desktop を再起動。
+
+---
+
+## 使い方
+
+### セッション開始時（毎回必須）
+
+```
+collab_switch_project("D:\\path\\to\\your-project")
+collab_status()
+```
+
+### 作業中
+
+```
+collab_add_note("気づいたことや進捗")
+collab_record_decision("採用技術", "FastAPI を選択。非同期処理が必要なため")
+collab_record_issue("ログイン後のリダイレクトが未実装")
+collab_set_task("認証機能の実装")
+collab_record_file("src/auth.py")
+```
+
+### セッション終了・引き継ぎ時
+
+```
+collab_checkpoint("認証の実装完了。次はテストを書く必要あり", "codex")
+```
+
+`HANDOFF.md` が生成されます。Codex Desktop の新しいセッションで「HANDOFF.md を読んで続きをお願いします」と伝えてください。
+
+---
+
+## MCPツール一覧
+
+| ツール | 用途 |
+|--------|------|
+| `collab_switch_project(path, project_name?)` | プロジェクトを設定・新規作成（毎セッション必須） |
+| `collab_status(calling_ai?)` | 状態を詳細表示（担当AI不一致を警告） |
+| `collab_summary()` | 状態を4行でコンパクトに表示 |
+| `collab_set_task(title)` | 現在タスクを設定 |
+| `collab_add_note(message)` | メモを追加 |
+| `collab_record_decision(title, content)` | 決定事項を記録 |
+| `collab_record_issue(message)` | 問題・注意点を記録（issue-NNN ID 付き） |
+| `collab_resolve_issue(issue_id, note?)` | 問題を解決済みにする |
+| `collab_list_resolved()` | 解決済み問題の一覧を表示 |
+| `collab_search(query)` | キーワードで全データを横断検索 |
+| `collab_record_file(path)` | 変更ファイルを記録 |
+| `collab_change_mode(mode)` | モード変更（plan / implement / review / debug） |
+| `collab_add_pending_task(title)` | 保留タスクを追加 |
+| `collab_close_pending_task(task_id, note?)` | 保留タスクを完了扱いに |
+| `collab_generate_handoff(to_ai)` | 引き継ぎ文書を生成して担当AIを切り替え |
+| `collab_checkpoint(message, to_ai?)` | メモ追加と引き継ぎを一度に実行 |
+| `collab_consult(ai, question)` | 相手AIのCLIに相談（要CLI設定） |
+| `collab_discuss(ai, topic)` | 相手AIと複数ラウンド議論（要CLI設定） |
+| `collab_setup_cli(ai, command, ...)` | CLIパス・引数設定をカスタマイズ |
+| `collab_cleanup_sessions(keep_per_ai?)` | 古いセッションログを削除 |
+| `collab_current_project()` | 現在のプロジェクトパスを表示 |
+
+---
+
+## プロジェクトフォルダ内に生成されるファイル
+
+| ファイル | 用途 |
+|----------|------|
+| `AI_STATE.json` | 共有状態（タスク・メモ・決定事項など） |
+| `HANDOFF.md` | 引き継ぎ文書 |
+| `ai_sessions/` | セッションログ |
+| `AI_STATE.lock` | 一時ロックファイル（処理後即削除） |
+| `cli_config.json` | CLI設定（`collab_setup_cli()` 呼び出し時のみ生成） |
+
+> これらはプロジェクトフォルダ内にのみ書き込まれます。ホームディレクトリへの書き込みは一切ありません。
+
+---
+
+## ライセンス
+
+MIT License — 詳細は [LICENSE](LICENSE) を参照。
+
+---
+
+<a name="english"></a>
+
+# multiAI-relay-mcp
+
+[日本語](#) | **English**
+
+A collaborative development system that lets Claude Desktop and Codex Desktop share state via MCP and hand off work across sessions.
+
+---
+
+## Features
+
+- 🔁 **Session Relay** — Switch between AI assistants at rate limits or handoff points, keeping work continuous
+- 📝 **Persistent Shared State** — Notes, decisions, tasks, and issues are stored in `AI_STATE.json` and survive across sessions
+- 🔍 **Cross-search** — Search notes, decisions, issues, and tasks by keyword in one call
+- 🔒 **Safe Concurrent Writes** — File locking + atomic writes prevent state corruption when Claude and Codex update simultaneously
+- 📦 **Zero writes outside project folder** — No home directory pollution
+
+---
+
+## Setup
+
+### Requirements
+
+- Python 3.11+
+- [uv](https://docs.astral.sh/uv/) installed
+- Claude Desktop and/or Codex Desktop
+
+### 1. Clone the repository
+
+```sh
+git clone https://github.com/Lasagnoa/multiAI-relay-mcp.git
+```
+
+### 2. Claude Desktop configuration
+
+Add to `%APPDATA%\Claude\claude_desktop_config.json` (Windows) or `~/Library/Application Support/Claude/claude_desktop_config.json` (Mac) under `mcpServers`:
+
+```json
+"multiai-relay-mcp": {
+  "command": "uvx",
+  "args": ["--from", "/path/to/multiAI-relay-mcp", "multiai-relay-mcp"]
+}
+```
+
+> Use `where uvx` (Windows) or `which uvx` (Mac/Linux) to find the full path if needed.
+> Restart Claude Desktop after editing.
+
+### 3. Codex Desktop configuration
+
+Add to `~/.codex/config.toml`:
+
+```toml
+[mcp_servers.multiai-relay-mcp]
+command = 'uvx'
+args = ['--from', '/path/to/multiAI-relay-mcp', 'multiai-relay-mcp']
+```
+
+> Restart Codex Desktop after editing.
+
+---
+
+## Usage
+
+### Start of every session
+
+```
+collab_switch_project("/path/to/your-project")
+collab_status()
+```
+
+### During work
+
+```
+collab_add_note("Finished auth module, moving to tests")
+collab_record_decision("Framework", "Using FastAPI — async support required")
+collab_record_issue("Redirect after login not yet implemented")
+collab_set_task("Write auth tests")
+collab_record_file("src/auth.py")
+```
+
+### End of session / handoff
+
+```
+collab_checkpoint("Auth done. Next: write tests", "codex")
+```
+
+A `HANDOFF.md` is generated. In a new Codex Desktop session, say: "Please read HANDOFF.md and continue."
+
+---
+
+## MCP Tools
+
+| Tool | Description |
+|------|-------------|
+| `collab_switch_project(path, project_name?)` | Set or create a project (required every session) |
+| `collab_status(calling_ai?)` | Show full status (warns on AI mismatch) |
+| `collab_summary()` | Show compact 4-line status |
+| `collab_set_task(title)` | Set current task |
+| `collab_add_note(message)` | Add a note |
+| `collab_record_decision(title, content)` | Record a decision |
+| `collab_record_issue(message)` | Record an issue (assigned issue-NNN ID) |
+| `collab_resolve_issue(issue_id, note?)` | Mark issue as resolved |
+| `collab_list_resolved()` | List resolved issues |
+| `collab_search(query)` | Cross-search all data by keyword |
+| `collab_record_file(path)` | Record a modified file |
+| `collab_change_mode(mode)` | Switch mode (plan / implement / review / debug) |
+| `collab_add_pending_task(title)` | Add a pending task |
+| `collab_close_pending_task(task_id, note?)` | Mark pending task as done |
+| `collab_generate_handoff(to_ai)` | Generate handoff doc and switch AI |
+| `collab_checkpoint(message, to_ai?)` | Add note + generate handoff in one call |
+| `collab_consult(ai, question)` | Consult the other AI's CLI (requires CLI setup) |
+| `collab_discuss(ai, topic)` | Multi-round discussion with the other AI's CLI |
+| `collab_setup_cli(ai, command, ...)` | Customize CLI path and arguments |
+| `collab_cleanup_sessions(keep_per_ai?)` | Delete old session logs |
+| `collab_current_project()` | Show current project path |
+
+---
+
+## Files generated in your project folder
+
+| File | Purpose |
+|------|---------|
+| `AI_STATE.json` | Shared state (tasks, notes, decisions, etc.) |
+| `HANDOFF.md` | Handoff document |
+| `ai_sessions/` | Session logs |
+| `AI_STATE.lock` | Temporary lock file (auto-deleted after use) |
+| `cli_config.json` | CLI config (created only when `collab_setup_cli()` is called) |
+
+> All writes are contained within your project folder. Nothing is written to your home directory.
+
+---
+
+## License
+
+MIT License — see [LICENSE](LICENSE) for details.
