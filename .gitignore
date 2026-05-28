@@ -8,6 +8,7 @@ ai_sessions/
 cli_config.json
 
 # Python
+uv.lock
 __pycache__/
 *.py[cod]
 *.pyo
