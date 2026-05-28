@@ -16,90 +16,51 @@ import re
 import json
 import datetime
 import os
-import shutil
-import subprocess
 import sys
-import time
 import tempfile
-from contextlib import contextmanager
 from pathlib import Path
 
 from mcp.server.fastmcp import FastMCP
 
-#region 定数・プロジェクト解決
-
-# 現在のプロジェクトパス（プロセス内メモリのみ。ファイルへの書き出しはしない）
-_current_project: Path | None = None
-
-# デフォルトのCLI呼び出し設定
-DEFAULT_CLI_CONFIG: dict = {
-    "claude": {
-        "command":     "claude",
-        "args_before": ["-p"],
-        "args_after":  ["--output-format", "text"],
-    },
-    "codex": {
-        "command":     "codex",
-        "args_before": ["exec"],
-        "args_after":  [],
-    },
-}
-
-VALID_MODES      = ["plan", "implement", "review", "debug"]
-VALID_AI         = ["claude", "codex"]
-VALID_SEVERITIES = ["P0", "P1", "P2", "P3"]       # P0=最優先, P3=低優先
-VALID_ISSUE_STATUSES = ["open", "deferred"]         # resolved は collab_resolve_issue が担当
-
-# severity → 絵文字マッピング（HANDOFF / status 表示用）
-_SEVERITY_EMOJI: dict[str, str] = {
-    "P0": "🔴", "P1": "🟠", "P2": "🟡", "P3": "🟢",
-}
-
-# Issue フィールドの入力制限
-_MAX_TAG_LEN      = 30   # タグ1件の最大文字数
-_MAX_TAGS         = 10   # タグの最大件数
-_MAX_CATEGORY_LEN = 50   # カテゴリの最大文字数
-_MAX_RELATED_FILES = 10  # related_files の最大件数
-
-# タグ・カテゴリの許可文字パターン（ASCII英数字・ハイフン・アンダースコア）
-_SLUG_RE = re.compile(r'^[\w\-]+$', re.ASCII)
-
-MODE_LABELS: dict[str, str] = {
-    "plan":      "仕様検討・設計",
-    "implement": "実装",
-    "review":    "レビュー",
-    "debug":     "デバッグ",
-}
-
-# 入力文字列の最大長（プロンプトインジェクション・状態肥大化対策）
-_MAX_INPUT_LEN = 2000
-
-# 状態スキーマのバージョン（collab_version / collab_doctor で参照）
-_STATE_SCHEMA_VERSION = "1.0"
-
-# 状態ファイルの必須キーとデフォルト値（スキーマ検証・補完用）
-_STATE_DEFAULTS: dict = {
-    "version":                 "1.0",
-    "project_name":            "不明",
-    "current_ai":              "claude",
-    "mode":                    "implement",
-    "session_count":           1,
-    "last_updated":            "",
-    "current_task":            None,
-    "completed_tasks":         [],
-    "notes":                   [],
-    "key_decisions":           [],
-    "known_issues":            [],
-    "resolved_issues":         [],
-    "pending_tasks":           [],
-    "completed_pending_tasks": [],
-    "handoff_template":        "full",
-}
-
-# ハンドオフテンプレートプリセット一覧
-VALID_HANDOFF_TEMPLATES = ["full", "minimal", "review", "debug"]
-
-#endregion
+from . import state as state_mod
+from .cli import (
+    _build_consult_prompt,
+    _call_ai_cli,
+    _cli_config_file,
+    _load_cli_config,
+    _resolve_cli_path,
+)
+from .rendering import _build_handoff
+from .state import (
+    DEFAULT_CLI_CONFIG,
+    MODE_LABELS,
+    VALID_AI,
+    VALID_HANDOFF_TEMPLATES,
+    VALID_ISSUE_STATUSES,
+    VALID_MODES,
+    VALID_SEVERITIES,
+    _MAX_CATEGORY_LEN,
+    _MAX_RELATED_FILES,
+    _MAX_TAGS,
+    _SEVERITY_EMOJI,
+    _SLUG_RE,
+    _STATE_DEFAULTS,
+    _STATE_SCHEMA_VERSION,
+    _append_session_log,
+    _archive_file,
+    _create_session_log,
+    _get_project_dir,
+    _handoff_file,
+    _load_state,
+    _now_iso,
+    _sessions_dir,
+    _state_file,
+    _state_transaction,
+    _validate_input,
+    _validate_related_files,
+    _validate_tags,
+    _write_atomic,
+)
 
 #region MCPサーバーインスタンス
 
@@ -112,479 +73,6 @@ mcp = FastMCP(
         "セッション終了・レートリミット前には collab_checkpoint を呼び出してください。"
     ),
 )
-
-#endregion
-
-#region プロジェクトディレクトリ解決
-
-def _get_project_dir() -> Path:
-    """
-    現在のプロジェクトディレクトリをメモリから取得する。
-
-    issue-006 短期対処: プロジェクトパスが削除・移動された場合も即座に検出する。
-    1プロセス=1アクティブプロジェクト前提の設計制限については README を参照。
-    """
-    if _current_project is None:
-        raise RuntimeError(
-            "現在のプロジェクトが設定されていません。\n"
-            "collab_switch_project('プロジェクトのフルパス') を呼び出してください。"
-        )
-    if not _current_project.exists():
-        raise RuntimeError(
-            f"プロジェクトディレクトリが見つかりません: {_current_project}\n"
-            "ディレクトリが削除・移動された可能性があります。\n"
-            "collab_switch_project() で正しいパスを再設定してください。"
-        )
-    if not _current_project.is_dir():
-        raise RuntimeError(
-            f"プロジェクトパスがディレクトリではありません: {_current_project}\n"
-            "collab_switch_project() で正しいパスを再設定してください。"
-        )
-    return _current_project
-
-def _state_file()   -> Path: return _get_project_dir() / "AI_STATE.json"
-def _handoff_file() -> Path: return _get_project_dir() / "HANDOFF.md"
-def _sessions_dir() -> Path: return _get_project_dir() / "ai_sessions"
-def _archive_file() -> Path: return _get_project_dir() / "AI_STATE.archive.json"
-
-#endregion
-
-#region 内部ユーティリティ
-
-# HANDOFF.md の信頼境界タグ（このタグを含む入力は拒否する）
-_INJECTION_TAG = "<!-- /USER INPUT -->"
-
-def _validate_tags(tags: list, field: str = "tags") -> str | None:
-    """タグリストの件数・文字数・文字種を検証する。問題があればエラーメッセージを返す。"""
-    if not isinstance(tags, list):
-        return f"エラー: {field} はリストで指定してください。"
-    if len(tags) > _MAX_TAGS:
-        return f"エラー: {field} は最大{_MAX_TAGS}件です（現在{len(tags)}件）。"
-    for tag in tags:
-        if not isinstance(tag, str):
-            return f"エラー: {field} の各要素は文字列である必要があります。"
-        if not tag:
-            return f"エラー: {field} に空のタグは指定できません。"
-        if len(tag) > _MAX_TAG_LEN:
-            return f"エラー: {field} の各タグは最大{_MAX_TAG_LEN}文字です: {tag!r}"
-        if not _SLUG_RE.match(tag):
-            return (f"エラー: {field} はアルファベット・数字・ハイフン・アンダースコアのみ使用できます: {tag!r}")
-    return None
-
-
-def _validate_related_files(files: list) -> str | None:
-    """related_files リストのパス安全性を検証する。問題があればエラーメッセージを返す。"""
-    if not isinstance(files, list):
-        return "エラー: related_files はリストで指定してください。"
-    if len(files) > _MAX_RELATED_FILES:
-        return f"エラー: related_files は最大{_MAX_RELATED_FILES}件です（現在{len(files)}件）。"
-    for fp in files:
-        if not isinstance(fp, str):
-            return "エラー: related_files の各要素は文字列である必要があります。"
-        if not fp:
-            return "エラー: related_files に空のパスは指定できません。"
-        if len(fp) > _MAX_INPUT_LEN:
-            return f"エラー: ファイルパスが長すぎます（最大{_MAX_INPUT_LEN}文字）。"
-        if any(c in fp for c in ('\n', '\r', '\t', '\0')):
-            return f"エラー: ファイルパスに制御文字を含めることはできません: {fp!r}"
-        norm = fp.replace('\\', '/')
-        if any(part == '..' for part in norm.split('/')):
-            return f"エラー: ファイルパスに「..」を含めることはできません: {fp!r}"
-        if Path(fp).is_absolute():
-            return f"エラー: related_files には相対パスを指定してください（絶対パス不可）: {fp!r}"
-    return None
-
-
-def _validate_input(text: str, field: str = "入力", max_len: int = _MAX_INPUT_LEN) -> str | None:
-    """
-    入力文字列の長さとインジェクションタグを検証する。
-    問題があればエラーメッセージを返し、問題なければ None を返す。
-    """
-    if len(text) > max_len:
-        return f"エラー: {field}が長すぎます（最大{max_len}文字、現在{len(text)}文字）。"
-    if _INJECTION_TAG in text:
-        return f"エラー: {field}に使用できない文字列が含まれています。"
-    return None
-
-
-def _pid_exists(pid: int) -> bool:
-    """PIDが現在実行中かどうか確認する（クロスプラットフォーム対応）"""
-    if sys.platform == "win32":
-        # Windows: OpenProcess でハンドルが取れるか確認する
-        import ctypes
-        PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
-        handle = ctypes.windll.kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
-        if handle:
-            ctypes.windll.kernel32.CloseHandle(handle)
-            return True
-        return False
-    else:
-        # POSIX: シグナル0でプロセスの存在を確認する（実際にはシグナルを送らない）
-        try:
-            os.kill(pid, 0)
-            return True
-        except ProcessLookupError:
-            return False
-        except PermissionError:
-            return True  # プロセスは存在するがアクセス権がない
-
-
-def _now_iso() -> str:
-    return datetime.datetime.now().isoformat(timespec="seconds")
-
-def _now_display() -> str:
-    return datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
-def _load_state() -> dict:
-    """状態ファイルを読み込む（旧フォーマットの自動マイグレーションを含む）"""
-    sf = _state_file()
-    if not sf.exists():
-        raise RuntimeError(
-            f"AI_STATE.json が見つかりません: {sf}\n"
-            "collab_switch_project(path, project_name='プロジェクト名') を呼び出して初期化してください。"
-        )
-    # issue-022: BOM付きJSON(utf-8-sig)も透過的に読み込む
-    with open(sf, "r", encoding="utf-8-sig") as f:
-        state = json.load(f)
-
-    # スキーマ検証: 必須キーの存在確認とデフォルト値での補完
-    for key, default in _STATE_DEFAULTS.items():
-        if key not in state:
-            # issue-005: copy.deepcopy でリストの可変デフォルトが別プロジェクトに漏洩するのを防ぐ
-            state[key] = copy.deepcopy(default)
-        elif isinstance(default, list) and not isinstance(state[key], list):
-            # リスト型が期待されるキーが別の型になっていた場合はリセット
-            state[key] = []
-        elif isinstance(default, int) and not isinstance(state[key], int):
-            try:
-                state[key] = int(state[key])
-            except (ValueError, TypeError):
-                state[key] = copy.deepcopy(default)
-
-    # issue-011: 文字列フィールドの型検証（破損データでの AttributeError を防ぐ）
-    for str_key in ("version", "project_name", "last_updated"):
-        if not isinstance(state.get(str_key), str):
-            state[str_key] = str(state[str_key]) if state.get(str_key) is not None else _STATE_DEFAULTS[str_key]
-    # current_ai / mode は値域も検証する
-    if state.get("current_ai") not in VALID_AI:
-        state["current_ai"] = "claude"
-    if state.get("mode") not in VALID_MODES:
-        state["mode"] = "implement"
-    # current_task が dict 以外なら None にリセット
-    if state.get("current_task") is not None and not isinstance(state["current_task"], dict):
-        state["current_task"] = None
-
-    # known_issues: 旧フォーマット（文字列）を構造化dictに移行してから normalize
-    migrated_issues = []
-    for i, issue in enumerate(state.get("known_issues", [])):
-        if isinstance(issue, str):
-            migrated_issues.append({
-                "id": f"issue-{i + 1:03d}",
-                "text": issue,
-                "added_at": "unknown",
-                "added_by": "unknown",
-            })
-        else:
-            migrated_issues.append(issue)
-    state["known_issues"] = [
-        r for r in (_normalize_issue(iss, resolved=False) for iss in migrated_issues)
-        if r is not None
-    ]
-
-    # resolved_issues も同様に normalize（status=resolved を補完）
-    state["resolved_issues"] = [
-        r for r in (_normalize_issue(iss, resolved=True) for iss in state.get("resolved_issues", []))
-        if r is not None
-    ]
-
-    # issue-013: ネストレコードの normalize（必須キー補完・型修正）
-    # 破損レコード（非dict）は除外し、残りを正規化してツールが例外終了しないようにする
-    state["notes"] = [
-        r for r in (_normalize_note(n) for n in state["notes"]) if r is not None
-    ]
-    state["key_decisions"] = [
-        r for r in (_normalize_decision(d) for d in state["key_decisions"]) if r is not None
-    ]
-    state["pending_tasks"] = [
-        r for r in (_normalize_pending_task(t) for t in state["pending_tasks"]) if r is not None
-    ]
-    state["completed_tasks"] = [
-        r for r in (_normalize_task(t) for t in state["completed_tasks"]) if r is not None
-    ]
-    state["completed_pending_tasks"] = [
-        r for r in (_normalize_pending_task(t) for t in state["completed_pending_tasks"]) if r is not None
-    ]
-    if state.get("current_task") is not None:
-        state["current_task"] = _normalize_task(state["current_task"])
-
-    return state
-
-
-def _normalize_task(task) -> dict | None:
-    """タスクレコードの必須キーを補完・型修正する。非dictは None を返す"""
-    if not isinstance(task, dict):
-        return None
-    task.setdefault("id", "task-???")
-    task.setdefault("title", "（データ破損）")
-    task.setdefault("description", "")
-    task.setdefault("started_at", "")
-    task.setdefault("started_by", "unknown")
-    if not isinstance(task.get("files_modified"), list):
-        task["files_modified"] = []
-    return task
-
-
-def _normalize_note(note) -> dict | None:
-    """メモレコードの必須キーを補完・型修正する。非dictは None を返す"""
-    if not isinstance(note, dict):
-        return None
-    note.setdefault("timestamp", "")
-    note.setdefault("ai", "unknown")
-    if not isinstance(note.get("text"), str):
-        note["text"] = str(note.get("text", ""))
-    return note
-
-
-def _normalize_decision(dec) -> dict | None:
-    """決定事項レコードの必須キーを補完・型修正する。非dictは None を返す"""
-    if not isinstance(dec, dict):
-        return None
-    dec.setdefault("timestamp", "")
-    dec.setdefault("ai", "unknown")
-    dec.setdefault("title", "（データ破損）")
-    if not isinstance(dec.get("content"), str):
-        dec["content"] = str(dec.get("content", ""))
-    return dec
-
-
-def _normalize_pending_task(task) -> dict | None:
-    """保留タスクレコードの必須キーを補完・型修正する。非dictは None を返す"""
-    if not isinstance(task, dict):
-        return None
-    task.setdefault("id", "pending-???")
-    task.setdefault("title", "（データ破損）")
-    task.setdefault("description", "")
-    task.setdefault("added_at", "")
-    task.setdefault("added_by", "unknown")
-    return task
-
-
-def _normalize_issue(issue, resolved: bool = False) -> dict | None:
-    """
-    Issue レコードの必須キーを補完・型修正する。非dictは None を返す。
-
-    - resolved=False: known_issues 用（status は "open" をデフォルト）
-    - resolved=True : resolved_issues 用（status は "resolved" に固定）
-    - 旧テキスト内の [P0]〜[P3] プレフィックスを severity に抽出（本文はそのまま保持）
-    """
-    if not isinstance(issue, dict):
-        return None
-    issue.setdefault("id", "issue-???")
-    issue.setdefault("text", "（データ破損）")
-    issue.setdefault("added_at", "")
-    issue.setdefault("added_by", "unknown")
-
-    # issue-021: 型安全 — 非文字列フィールドを str に補正してから re.match を呼ぶ
-    for _str_key in ("id", "text", "added_at", "added_by"):
-        if not isinstance(issue[_str_key], str):
-            issue[_str_key] = str(issue[_str_key])
-
-    # [P0]〜[P3] プレフィックスを severity に自動抽出（まだ severity フィールドがない場合）
-    if "severity" not in issue:
-        m = re.match(r'^\[P([0-3])\]\s*', issue["text"])
-        issue["severity"] = f"P{m.group(1)}" if m else "P2"
-    if issue.get("severity") not in VALID_SEVERITIES:
-        issue["severity"] = "P2"
-
-    # category: slug 文字列（不正値はデフォルトにリセット）
-    if not isinstance(issue.get("category"), str) or not issue.get("category"):
-        issue["category"] = "general"
-    elif not _SLUG_RE.match(issue["category"]) or len(issue["category"]) > _MAX_CATEGORY_LEN:
-        issue["category"] = "general"
-
-    # tags: slug 配列（不正要素は除去）
-    raw_tags = issue.get("tags", [])
-    if not isinstance(raw_tags, list):
-        raw_tags = []
-    issue["tags"] = [
-        t for t in raw_tags
-        if isinstance(t, str) and t and _SLUG_RE.match(t) and len(t) <= _MAX_TAG_LEN
-    ][:_MAX_TAGS]
-
-    # related_files: 文字列配列（制御文字・絶対パス・.. を除去）
-    raw_files = issue.get("related_files", [])
-    if not isinstance(raw_files, list):
-        raw_files = []
-    clean_files = []
-    for fp in raw_files:
-        if not isinstance(fp, str) or not fp:
-            continue
-        if any(c in fp for c in ('\n', '\r', '\t', '\0')):
-            continue
-        if any(part == '..' for part in fp.replace('\\', '/').split('/')):
-            continue
-        if Path(fp).is_absolute():
-            continue
-        clean_files.append(fp)
-    issue["related_files"] = clean_files[:_MAX_RELATED_FILES]
-
-    # status: resolved_issues は "resolved" 固定、known_issues は open/deferred
-    if resolved:
-        issue["status"] = "resolved"
-        issue.setdefault("resolved_at", "")
-        issue.setdefault("resolved_by", "unknown")
-    else:
-        if issue.get("status") not in VALID_ISSUE_STATUSES:
-            issue["status"] = "open"
-
-    return issue
-
-class _StateLock:
-    """
-    AI_STATE.json の簡易ファイルロック。
-    Claude と Codex が同時に read-modify-write する際のデータ消失を防ぐ。
-    ロックファイルに PID を書き込み、スタール解除時に所有者を確認する。
-    クラッシュ後に残ったロックファイルは STALE_SEC 秒後に自動解除する。
-    """
-    _TIMEOUT_SEC = 10  # ロック取得タイムアウト
-    _STALE_SEC   = 30  # この秒数より古いロックファイルはスタールとみなす
-
-    def __init__(self, sf: Path):
-        self._lock = sf.with_suffix(".lock")
-
-    def _read_lock_pid(self) -> int | None:
-        """ロックファイルに記録されたPIDを読む。読めない場合は None を返す"""
-        try:
-            text = self._lock.read_text(encoding="utf-8").strip()
-            return int(text) if text.isdigit() else None
-        except OSError:
-            return None
-
-    def __enter__(self) -> "_StateLock":
-        deadline = time.monotonic() + self._TIMEOUT_SEC
-        my_pid = os.getpid()
-        while time.monotonic() < deadline:
-            try:
-                # exist_ok=False → 排他的作成（ほぼアトミック）
-                self._lock.touch(exist_ok=False)
-                # PIDを書き込んで所有者を記録する
-                try:
-                    self._lock.write_text(str(my_pid), encoding="utf-8")
-                except OSError:
-                    pass
-                return self
-            except FileExistsError:
-                # スタールロックを検出したら PID の生存を確認してから解除
-                try:
-                    age = time.time() - self._lock.stat().st_mtime
-                    if age > self._STALE_SEC:
-                        lock_pid = self._read_lock_pid()
-                        # 自分のPIDでないロックのみ対象
-                        if lock_pid != my_pid:
-                            # issue-007: PID生存確認 — 生存中のプロセスのロックは奪わない
-                            if lock_pid is not None and _pid_exists(lock_pid):
-                                # 所有プロセスがまだ動いている → スタールではない
-                                time.sleep(0.05)
-                                continue
-                            self._lock.unlink(missing_ok=True)
-                            continue
-                except OSError:
-                    pass
-                time.sleep(0.05)
-        raise RuntimeError(
-            f"AI_STATE.json のロック取得がタイムアウトしました（{self._TIMEOUT_SEC}秒）。\n"
-            f"ロックファイルが残っている場合は手動で削除してください: {self._lock}"
-        )
-
-    def __exit__(self, *_) -> None:
-        # 自分のPIDのロックのみ削除（他プロセスが上書きした場合は削除しない）
-        lock_pid = self._read_lock_pid()
-        if lock_pid is None or lock_pid == os.getpid():
-            self._lock.unlink(missing_ok=True)
-
-
-def _save_state(state: dict) -> None:
-    """状態ファイルに原子的に保存する（ファイルロック＋一時ファイル経由のリネーム）"""
-    state["last_updated"] = _now_iso()
-    sf = _state_file()
-
-    # 一時ファイルに書き込んでからリネーム → 書き込み中断による破損を防ぐ
-    tmp_fd, tmp_path = tempfile.mkstemp(dir=sf.parent, suffix=".tmp", prefix="AI_STATE_")
-    try:
-        with os.fdopen(tmp_fd, "w", encoding="utf-8") as f:
-            json.dump(state, f, ensure_ascii=False, indent=2)
-        os.replace(tmp_path, sf)  # アトミックなリネーム
-    except Exception:
-        try:
-            os.unlink(tmp_path)
-        except OSError:
-            pass
-        raise
-
-@contextmanager
-def _state_transaction():
-    """
-    AI_STATE.json への read-modify-write をロックで保護するコンテキストマネージャ。
-
-    with _state_transaction() as state:
-        state["notes"].append(...)
-    # ← ここでロックを解放しつつ原子的に保存される
-
-    _load_state() と _save_state() を直接呼ぶ代わりにこれを使うこと。
-    """
-    sf = _state_file()
-    with _StateLock(sf):
-        state = _load_state()
-        yield state
-        _save_state(state)
-
-
-def _write_atomic(path: Path, content: str) -> None:
-    """テキストファイルを一時ファイル経由で原子的に書き込む（クラッシュ時の破損防止）"""
-    tmp_fd, tmp_path = tempfile.mkstemp(dir=path.parent, suffix=".tmp")
-    try:
-        with os.fdopen(tmp_fd, "w", encoding="utf-8") as f:
-            f.write(content)
-        os.replace(tmp_path, path)
-    except Exception:
-        try:
-            os.unlink(tmp_path)
-        except OSError:
-            pass
-        raise
-
-
-def _append_session_log(ai_name: str, message: str) -> None:
-    """現在のセッションログに1行追記する。失敗時は握り潰さず警告を出す"""
-    sd = _sessions_dir()
-    if not sd.exists():
-        return
-    logs = sorted(sd.glob(f"*_{ai_name}.md"), reverse=True)
-    if not logs:
-        return
-    time_str = datetime.datetime.now().strftime("%H:%M:%S")
-    try:
-        with open(logs[0], "a", encoding="utf-8") as f:
-            f.write(f"- [{time_str}] [MCP] {message}\n")
-    except OSError as e:
-        # セッションログへの追記失敗は致命的ではないが記録する
-        import warnings
-        warnings.warn(f"セッションログへの追記に失敗しました: {logs[0]}: {e}", stacklevel=2)
-
-
-def _create_session_log(ai_name: str, session_number: int, mode: str) -> None:
-    """新しいセッションログファイルを原子的に作成する"""
-    sd = _sessions_dir()
-    sd.mkdir(exist_ok=True)
-    ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    content = (
-        f"# セッションログ: {ai_name.upper()}\n"
-        f"**開始日時:** {_now_display()}\n"
-        f"**セッション番号:** {session_number}\n"
-        f"**モード:** {MODE_LABELS.get(mode, mode)}\n"
-        f"\n## 作業ログ\n"
-    )
-    _write_atomic(sd / f"{ts}_{ai_name}.md", content)
 
 #endregion
 
@@ -605,8 +93,6 @@ def collab_switch_project(project_path: str, project_name: str = "") -> str:
         project_path: プロジェクトのフルパス（例: D:\\MyProject）
         project_name: 新規作成時のプロジェクト名。既存プロジェクトでは無視される。
     """
-    global _current_project
-
     # 絶対パスであることを確認（相対パスによるディレクトリトラバーサルを防ぐ）
     if not Path(project_path).is_absolute():
         return f"エラー: 絶対パスを指定してください（相対パスは不可）: {project_path}"
@@ -626,7 +112,7 @@ def collab_switch_project(project_path: str, project_name: str = "") -> str:
                 f"新規プロジェクトとして初期化する場合は project_name を指定してください:\n"
                 f'  collab_switch_project("{path}", project_name="プロジェクト名")'
             )
-        _current_project = path
+        state_mod.set_current_project(path)
         initial_state = {
             "project_name": project_name,
             "current_ai": "claude",
@@ -664,7 +150,7 @@ def collab_switch_project(project_path: str, project_name: str = "") -> str:
         )
 
     # 既存プロジェクトを吸収して接続（project_name は無視）
-    _current_project = path
+    state_mod.set_current_project(path)
     # issue-022: BOM付きJSON(utf-8-sig)も透過的に読み込む
     with open(state_file, "r", encoding="utf-8-sig") as f:
         state = json.load(f)
@@ -683,22 +169,22 @@ def collab_switch_project(project_path: str, project_name: str = "") -> str:
 @mcp.tool()
 def collab_current_project() -> str:
     """現在アクティブなプロジェクトのパスと存在状態を確認する。"""
-    if _current_project is None:
+    if state_mod.get_current_project_raw() is None:
         return "現在のプロジェクトは設定されていません。collab_switch_project() を呼び出してください。"
-    if not _current_project.exists():
+    if not state_mod.get_current_project_raw().exists():
         return (
-            f"⚠️ プロジェクトディレクトリが見つかりません: {_current_project}\n"
+            f"⚠️ プロジェクトディレクトリが見つかりません: {state_mod.get_current_project_raw()}\n"
             "ディレクトリが削除・移動された可能性があります。\n"
             "collab_switch_project() で正しいパスを再設定してください。"
         )
-    if not _current_project.is_dir():
+    if not state_mod.get_current_project_raw().is_dir():
         return (
-            f"⚠️ 設定パスがディレクトリではありません: {_current_project}\n"
+            f"⚠️ 設定パスがディレクトリではありません: {state_mod.get_current_project_raw()}\n"
             "collab_switch_project() で正しいパスを再設定してください。"
         )
-    state_ok = (_current_project / "AI_STATE.json").exists()
+    state_ok = (state_mod.get_current_project_raw() / "AI_STATE.json").exists()
     return (
-        f"現在のプロジェクト: {_current_project}\n"
+        f"現在のプロジェクト: {state_mod.get_current_project_raw()}\n"
         f"  状態ファイル: {'存在 ✅' if state_ok else '未作成 ⚠️（collab_switch_project で初期化してください）'}"
     )
 
@@ -711,7 +197,7 @@ def collab_version() -> str:
     """
     MCPサーバーと実行環境のバージョン情報を返す。
     """
-    project_path = str(_current_project) if _current_project else "（未設定）"
+    project_path = str(state_mod.get_current_project_raw()) if state_mod.get_current_project_raw() else "（未設定）"
     try:
         config_path     = str(_state_file())
     except RuntimeError:
@@ -761,15 +247,15 @@ def collab_doctor(
     def err(msg: str)  -> None: err_items.append(f"❌ ERR  {msg}")
 
     # プロジェクトフォルダ確認
-    if _current_project is None:
+    if state_mod.get_current_project_raw() is None:
         warn("プロジェクト未設定 — collab_switch_project() を呼んでください")
-    elif not _current_project.exists():
-        err(f"プロジェクトフォルダが存在しない: {_current_project}")
+    elif not state_mod.get_current_project_raw().exists():
+        err(f"プロジェクトフォルダが存在しない: {state_mod.get_current_project_raw()}")
     else:
-        ok(f"プロジェクトフォルダ: {_current_project}")
+        ok(f"プロジェクトフォルダ: {state_mod.get_current_project_raw()}")
 
     # 状態ファイル確認
-    if check_state and _current_project and _current_project.exists():
+    if check_state and state_mod.get_current_project_raw() and state_mod.get_current_project_raw().exists():
         sf = _state_file()
         if not sf.exists():
             warn("AI_STATE.json が未作成 — collab_switch_project() で新規作成できます")
@@ -785,7 +271,7 @@ def collab_doctor(
                 err(f"AI_STATE.json 読み込み失敗: {e}")
 
     # ロックファイル確認
-    if check_lock and _current_project and _current_project.exists():
+    if check_lock and state_mod.get_current_project_raw() and state_mod.get_current_project_raw().exists():
         lock_file = _get_project_dir() / "AI_STATE.lock"
         if lock_file.exists():
             try:
@@ -1495,310 +981,6 @@ def collab_checkpoint(message: str, to_ai: str = "", dry_run: bool = False) -> s
         f"メモ: {message}\n"
         f"ファイル: {_handoff_file()}"
     )
-
-#endregion
-
-#region ハンドオフ文書生成
-
-def _build_handoff(state: dict, from_ai: str, to_ai: str) -> str:
-    """
-    ハンドオフ用マークダウン文書を生成する。
-    state['handoff_template'] に従い出力内容を切り替える。
-    - full    : 全セクション（デフォルト）
-    - minimal : 現在タスク＋最新メモ3件＋既知の問題のみ
-    - review  : full ＋ レビューポイントセクション
-    - debug   : full ＋ デバッグ情報セクション
-    """
-    template = state.get("handoff_template", "full")
-    mode_label = MODE_LABELS.get(state["mode"], state["mode"])
-
-    # ── 共通ヘッダ ──────────────────────────────────────────────────────
-    lines = [
-        "# AI協働開発 ハンドオフドキュメント", "",
-        f"> **引き継ぎ元:** {from_ai.upper()}　→　**引き継ぎ先:** {to_ai.upper()}",
-        f"> **日時:** {_now_display()}　｜　**プロジェクト:** {state['project_name']}",
-        f"> **モード:** {mode_label}　｜　**セッション:** #{state['session_count']}",
-        f"> **テンプレート:** {template}",
-        "", "---", "", "## 現在のタスク", "",
-    ]
-
-    if state.get("current_task"):
-        task = state["current_task"]
-        # issue-009: タスクタイトル/詳細もユーザー入力なのでタグでラップする
-        lines += [f"**タスクID:** `{task['id']}`",
-                  f"**タイトル:** <!-- USER INPUT -->{task['title']}<!-- /USER INPUT -->"]
-        if task.get("description"):
-            lines.append(f"**詳細:** <!-- USER INPUT -->{task['description']}<!-- /USER INPUT -->")
-        lines.append(f"**開始:** {task['started_at'][:16]}  担当: {task.get('started_by', '?').upper()}")
-        if task.get("files_modified"):
-            # issue-016: files_modified もユーザー入力なのでタグでラップする
-            lines += ["", "**変更済みファイル:**"] + [
-                f"- <!-- USER INPUT -->`{fp}`<!-- /USER INPUT -->" for fp in task["files_modified"]
-            ]
-    else:
-        lines.append("*タスクは設定されていません。*")
-
-    # ── セクション構築ヘルパー ──────────────────────────────────────────
-    def section(title, items, empty="*なし*"):
-        return ["", "---", "", f"## {title}", ""] + (items if items else [empty])
-
-    def _fmt_issue(iss) -> str:
-        if isinstance(iss, dict):
-            emoji = _SEVERITY_EMOJI.get(iss.get("severity", "P2"), "⚠️")
-            sev   = iss.get("severity", "?")
-            stat  = "" if iss.get("status", "open") == "open" else f" [{iss['status']}]"
-            tags  = f" ({', '.join(iss['tags'])})" if iss.get("tags") else ""
-            # 旧テキストに [P0]〜[P3] プレフィックスが残っている場合は表示上だけ除去する
-            text  = re.sub(r'^\[P[0-3]\]\s*', '', iss['text'])
-            return (f"- {emoji} [{iss['id']}][{sev}]{stat} "
-                    f"<!-- USER INPUT -->{text}<!-- /USER INPUT -->{tags}")
-        return f"- ⚠️ <!-- USER INPUT -->{iss}<!-- /USER INPUT -->"
-
-    def _note_lines(notes, limit: int) -> list[str]:
-        nl = []
-        if len(notes) > limit:
-            nl.append(f"- *過去{len(notes) - limit}件のメモを省略*")
-        nl += [
-            f"- `{n['timestamp'][:16]}` ({n['ai'].upper()}) <!-- USER INPUT -->{n['text']}<!-- /USER INPUT -->"
-            for n in notes[-limit:]
-        ]
-        return nl
-
-    def _decisions_section(decisions, limit: int = 10) -> list[str]:
-        if not decisions:
-            return ["", "---", "", "## 重要な決定事項", "", "*なし*"]
-        out = ["", "---", "", "## 重要な決定事項", ""]
-        if len(decisions) > limit:
-            out.append(f"*過去{len(decisions) - limit}件の決定事項を省略*")
-            out.append("")
-        for dec in decisions[-limit:]:
-            out += [
-                f"### <!-- USER INPUT -->{dec['title']}<!-- /USER INPUT -->",
-                f"*{dec['timestamp'][:10]}  by {dec['ai'].upper()}*",
-                "",
-                "<!-- USER INPUT -->",
-                dec["content"],
-                "<!-- /USER INPUT -->",
-                "",
-            ]
-        return out
-
-    # ── テンプレート別セクション組み立て ───────────────────────────────
-    notes     = state.get("notes", [])
-    decisions = state.get("key_decisions", [])
-    # severity 昇順（P0優先）でソート済みのリストを全テンプレートで共用する
-    issues = sorted(
-        state.get("known_issues", []),
-        key=lambda i: VALID_SEVERITIES.index(i.get("severity", "P2"))
-        if isinstance(i, dict) and i.get("severity") in VALID_SEVERITIES else 99
-    )
-
-    if template == "minimal":
-        # 現在タスク（ヘッダ済み）＋ 最新メモ3件 ＋ 既知の問題のみ
-        lines += section("最近のメモ（最新3件）", _note_lines(notes, 3))
-        lines += section("既知の問題・注意点", [_fmt_issue(i) for i in issues])
-
-    elif template == "review":
-        # full ＋ レビューポイントセクション
-        lines += section("保留中のタスク",
-            [f"- [ ] <!-- USER INPUT -->{t['title']}<!-- /USER INPUT -->"
-             + (f" — <!-- USER INPUT -->{t['description']}<!-- /USER INPUT -->" if t.get("description") else "")
-             for t in state.get("pending_tasks", [])])
-        lines += section("最近のメモ（最新10件）", _note_lines(notes, 10))
-        lines += _decisions_section(decisions)
-        lines += section("既知の問題・注意点", [_fmt_issue(i) for i in issues])
-        lines += section("完了済みタスク（最近5件）",
-            [f"- ✅ `{t['id']}` <!-- USER INPUT -->{t['title']}<!-- /USER INPUT --> ({t.get('completed_at', '?')[:10]})"
-             for t in state.get("completed_tasks", [])[-5:]])
-        lines += section("完了した保留タスク（最近5件）",
-            [f"- ✅ `{t['id']}` <!-- USER INPUT -->{t['title']}<!-- /USER INPUT --> ({t.get('completed_at', '?')[:10]})"
-             for t in state.get("completed_pending_tasks", [])[-5:]])
-        # レビュー専用セクション
-        lines += [
-            "", "---", "", "## 📋 レビューポイント", "",
-            "以下の観点でレビューしてください:",
-            "- 実装が決定事項と一致しているか",
-            "- 既知の問題が解決されているか",
-            "- コードの品質・セキュリティ・パフォーマンス",
-            "- 次のフェーズに進む前に確認すべき点",
-        ]
-
-    elif template == "debug":
-        # full ＋ デバッグ情報セクション
-        lines += section("保留中のタスク",
-            [f"- [ ] <!-- USER INPUT -->{t['title']}<!-- /USER INPUT -->"
-             + (f" — <!-- USER INPUT -->{t['description']}<!-- /USER INPUT -->" if t.get("description") else "")
-             for t in state.get("pending_tasks", [])])
-        lines += section("最近のメモ（最新10件）", _note_lines(notes, 10))
-        lines += _decisions_section(decisions)
-        lines += section("既知の問題・注意点", [_fmt_issue(i) for i in issues])
-        lines += section("完了済みタスク（最近5件）",
-            [f"- ✅ `{t['id']}` <!-- USER INPUT -->{t['title']}<!-- /USER INPUT --> ({t.get('completed_at', '?')[:10]})"
-             for t in state.get("completed_tasks", [])[-5:]])
-        lines += section("完了した保留タスク（最近5件）",
-            [f"- ✅ `{t['id']}` <!-- USER INPUT -->{t['title']}<!-- /USER INPUT --> ({t.get('completed_at', '?')[:10]})"
-             for t in state.get("completed_pending_tasks", [])[-5:]])
-        # デバッグ専用セクション
-        task_files = state.get("current_task", {}) or {}
-        all_files  = task_files.get("files_modified", [])
-        lines += [
-            "", "---", "", "## 🐛 デバッグ情報", "",
-            "**直近の変更ファイル:**",
-        ] + ([f"- `{fp}`" for fp in all_files] if all_files else ["- *なし*"]) + [
-            "",
-            "**未解決の問題 (issue-NNN形式):**",
-        ] + ([_fmt_issue(i) for i in issues if isinstance(i, dict) and not i.get("resolved")]
-             if issues else ["- *なし*"]) + [
-            "",
-            "**デバッグ優先事項:** 既知の問題から着手し、変更ファイルを重点的に確認してください。",
-        ]
-
-    else:
-        # full（デフォルト）: 全セクション
-        lines += section("保留中のタスク",
-            [f"- [ ] <!-- USER INPUT -->{t['title']}<!-- /USER INPUT -->"
-             + (f" — <!-- USER INPUT -->{t['description']}<!-- /USER INPUT -->" if t.get("description") else "")
-             for t in state.get("pending_tasks", [])])
-        # 外部入力（ユーザーが記録した内容）はタグで囲んで信頼済み指示と区別する
-        lines += section("最近のメモ（最新10件）", _note_lines(notes, 10))
-        lines += _decisions_section(decisions)
-        lines += section("既知の問題・注意点", [_fmt_issue(i) for i in issues])
-        # issue-016: 完了タスクのタイトルもユーザー入力なのでタグでラップする
-        lines += section("完了済みタスク（最近5件）",
-            [f"- ✅ `{t['id']}` <!-- USER INPUT -->{t['title']}<!-- /USER INPUT --> ({t.get('completed_at', '?')[:10]})"
-             for t in state.get("completed_tasks", [])[-5:]])
-        lines += section("完了した保留タスク（最近5件）",
-            [f"- ✅ `{t['id']}` <!-- USER INPUT -->{t['title']}<!-- /USER INPUT --> ({t.get('completed_at', '?')[:10]})"
-             for t in state.get("completed_pending_tasks", [])[-5:]])
-
-    # ── 共通フッタ（セッション開始手順） ────────────────────────────────
-    lines += [
-        "", "---", "", f"## {to_ai.upper()} セッション開始手順", "",
-        "**1. プロジェクトを設定する（毎セッション必須）**",
-        "```", f'collab_switch_project("{_get_project_dir()}")', "```", "",
-        "**2. 状態を確認する**",
-        "```", "collab_status()", "```", "",
-        "**3. 作業中はこまめにメモを残す**",
-        "```", 'collab_add_note("気づいたことや進捗")', "```", "",
-        "**4. セッション終了・レートリミット前にチェックポイントを生成する**",
-        "```", f'collab_checkpoint("ここまでの進捗と次の作業", "{from_ai}")', "```",
-    ]
-    return "\n".join(lines) + "\n"
-
-#endregion
-
-#region CLI呼び出しユーティリティ
-
-def _cli_config_file() -> Path:
-    """CLI設定ファイルのパスを返す（プロジェクトフォルダ内）"""
-    return _get_project_dir() / "cli_config.json"
-
-
-def _load_cli_config() -> dict:
-    """CLI設定を読み込む（プロジェクトフォルダ内の cli_config.json を参照）"""
-    config = {k: dict(v) for k, v in DEFAULT_CLI_CONFIG.items()}
-    try:
-        cfg_file = _cli_config_file()
-        if cfg_file.exists():
-            with open(cfg_file, "r", encoding="utf-8-sig") as f:
-                for ai, cfg in json.load(f).items():
-                    config.setdefault(ai, {}).update(cfg)
-    except RuntimeError:
-        # プロジェクト未設定の場合はデフォルト設定を返す
-        pass
-    return config
-
-
-def _resolve_cli_path(ai: str, command: str) -> str | None:
-    """CLIの実行ファイルパスを解決する"""
-    found = shutil.which(command)
-    if found:
-        return found
-    if ai == "codex":
-        env_path = os.environ.get("CODEX_CLI_PATH")
-        if env_path and Path(env_path).exists():
-            return env_path
-        codex_bin = Path.home() / "AppData" / "Local" / "OpenAI" / "Codex" / "bin"
-        if codex_bin.exists():
-            matches = sorted(codex_bin.rglob("codex.exe"), reverse=True)
-            if matches:
-                return str(matches[0])
-    return None
-
-
-def _call_ai_cli(ai: str, prompt: str, timeout: int = 180) -> str:
-    """指定 AI の CLI をサブプロセスとして呼び出し、回答テキストを返す"""
-    config = _load_cli_config()
-    cfg = config.get(ai)
-    if not cfg:
-        return f"エラー: '{ai}' のCLI設定がありません。"
-
-    cli_path = _resolve_cli_path(ai, cfg["command"])
-    if not cli_path:
-        return (
-            f"エラー: {ai.upper()} CLI が見つかりません。\n"
-            f"・'{cfg['command']}' が PATH に存在するか確認してください。\n"
-            f"・または collab_setup_cli() で設定してください。"
-        )
-
-    cmd = [cli_path] + cfg.get("args_before", []) + [prompt] + cfg.get("args_after", [])
-
-    # プロジェクトディレクトリをCWDに設定する（Codex はgitリポジトリ内での実行が必要）
-    cwd = str(_current_project) if _current_project and _current_project.exists() else None
-
-    # CLIが標準出力に出力するノイズ行（stdin確認メッセージなど）
-    _NOISE_LINES: set[str] = {
-        "Reading additional input from stdin...",
-    }
-
-    try:
-        result = subprocess.run(
-            cmd, capture_output=True, text=True,
-            stdin=subprocess.DEVNULL,  # MCP stdio パイプが stdin に流れ込んでブロックするのを防ぐ
-            cwd=cwd,  # プロジェクトディレクトリで実行（git repo チェック対応）
-            timeout=timeout, encoding="utf-8", errors="replace",
-        )
-        # ノイズ行を除去してから応答テキストを構築
-        cleaned_lines = [
-            line for line in result.stdout.splitlines()
-            if line.strip() not in _NOISE_LINES
-        ]
-        response = "\n".join(cleaned_lines).strip() or result.stderr.strip()
-        if not response:
-            # 応答が空の場合は対話TUIが起動した可能性がある
-            return (
-                f"（{ai.upper()} CLI から応答がありませんでした）\n"
-                f"Codex CLI が対話モードで起動している可能性があります。\n"
-                f"collab_setup_cli('{ai}', ...) で非対話引数を設定してください。"
-            )
-        return response
-    except subprocess.TimeoutExpired:
-        return f"エラー: {ai.upper()} CLI が {timeout}秒 以内に応答しませんでした。"
-    except FileNotFoundError:
-        return f"エラー: 実行ファイルが見つかりません: {cli_path}"
-    except Exception as e:
-        return f"エラー: {ai.upper()} CLI 呼び出し中に問題が発生しました: {e}"
-
-
-def _build_consult_prompt(question: str) -> str:
-    """現在のプロジェクト文脈を付加した相談プロンプトを生成する"""
-    try:
-        state = _load_state()
-        task_title = state["current_task"]["title"] if state.get("current_task") else "未設定"
-        lines = [
-            "[AI協働開発システムからの相談]",
-            f"プロジェクト : {state['project_name']}",
-            f"現在のタスク : {task_title}",
-            f"相談元の AI  : {state['current_ai'].upper()}",
-        ]
-        if state.get("key_decisions"):
-            lines += ["", "## 既存の設計決定事項（参考）"]
-            for dec in state["key_decisions"][-3:]:
-                lines.append(f"- {dec['title']}: {dec['content'][:200]}")
-        lines += ["", "---", "", f"## 相談内容\n{question}"]
-        return "\n".join(lines)
-    except Exception:
-        return question
 
 #endregion
 
@@ -2645,7 +1827,7 @@ def _print_help(version_only: bool = False) -> None:
 
 
 
-_VERSION = "1.0.15"
+_VERSION = "1.0.16"
 
 # ヘルプテキスト（AIが読むことを想定して日本語で詳述）
 _HELP_TEXT = f"""\

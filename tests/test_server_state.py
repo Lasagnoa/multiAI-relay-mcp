@@ -4,10 +4,11 @@ import json
 import pytest
 
 from multiai_relay_mcp import server
+from multiai_relay_mcp import state as state_mod
 
 
 def make_state(**overrides):
-    state = copy.deepcopy(server._STATE_DEFAULTS)
+    state = copy.deepcopy(state_mod._STATE_DEFAULTS)
     state.update({
         "project_name": "TestProject",
         "current_ai": "codex",
@@ -28,10 +29,10 @@ def write_state(project_dir, state, encoding="utf-8"):
 
 @pytest.fixture
 def project(tmp_path, monkeypatch):
-    monkeypatch.setattr(server, "_current_project", tmp_path)
+    state_mod.set_current_project(tmp_path)
     write_state(tmp_path, make_state())
     yield tmp_path
-    monkeypatch.setattr(server, "_current_project", None)
+    state_mod.set_current_project(None)
 
 
 def test_load_state_accepts_bom_and_normalizes_non_string_issue(project):
