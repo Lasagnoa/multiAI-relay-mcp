@@ -243,7 +243,8 @@ def _load_state() -> dict:
             f"AI_STATE.json が見つかりません: {sf}\n"
             "collab_switch_project(path, project_name='プロジェクト名') を呼び出して初期化してください。"
         )
-    with open(sf, "r", encoding="utf-8") as f:
+    # issue-022: BOM付きJSON(utf-8-sig)も透過的に読み込む
+    with open(sf, "r", encoding="utf-8-sig") as f:
         state = json.load(f)
 
     # スキーマ検証: 必須キーの存在確認とデフォルト値での補完
@@ -382,6 +383,11 @@ def _normalize_issue(issue, resolved: bool = False) -> dict | None:
     issue.setdefault("text", "（データ破損）")
     issue.setdefault("added_at", "")
     issue.setdefault("added_by", "unknown")
+
+    # issue-021: 型安全 — 非文字列フィールドを str に補正してから re.match を呼ぶ
+    for _str_key in ("id", "text", "added_at", "added_by"):
+        if not isinstance(issue[_str_key], str):
+            issue[_str_key] = str(issue[_str_key])
 
     # [P0]〜[P3] プレフィックスを severity に自動抽出（まだ severity フィールドがない場合）
     if "severity" not in issue:
@@ -659,7 +665,8 @@ def collab_switch_project(project_path: str, project_name: str = "") -> str:
 
     # 既存プロジェクトを吸収して接続（project_name は無視）
     _current_project = path
-    with open(state_file, "r", encoding="utf-8") as f:
+    # issue-022: BOM付きJSON(utf-8-sig)も透過的に読み込む
+    with open(state_file, "r", encoding="utf-8-sig") as f:
         state = json.load(f)
 
     absorbed = "（既存を吸収して接続）" if project_name else ""
@@ -1693,7 +1700,7 @@ def _load_cli_config() -> dict:
     try:
         cfg_file = _cli_config_file()
         if cfg_file.exists():
-            with open(cfg_file, "r", encoding="utf-8") as f:
+            with open(cfg_file, "r", encoding="utf-8-sig") as f:
                 for ai, cfg in json.load(f).items():
                     config.setdefault(ai, {}).update(cfg)
     except RuntimeError:
@@ -1930,7 +1937,7 @@ def collab_setup_cli(ai: str, command: str, args_before: list[str] = [], args_af
     cfg_file = _cli_config_file()
     config = {}
     if cfg_file.exists():
-        with open(cfg_file, "r", encoding="utf-8") as f:
+        with open(cfg_file, "r", encoding="utf-8-sig") as f:
             config = json.load(f)
 
     config[ai] = {"command": command, "args_before": args_before, "args_after": args_after}
@@ -2069,8 +2076,13 @@ def collab_timeline(
 
     for iss in state.get("known_issues", []):
         if isinstance(iss, dict):
-            _add(iss.get("timestamp", ""), "issue", iss.get("ai", "?"),
-                 f"[{iss.get('id','?')}] {iss.get('text','')[:80]}")
+            # issue-020: 構造化issueは added_at/added_by を優先、旧データは timestamp/ai にフォールバック
+            _add(
+                iss.get("added_at", "") or iss.get("timestamp", ""),
+                "issue",
+                iss.get("added_by", "") or iss.get("ai", "?"),
+                f"[{iss.get('id','?')}] {iss.get('text','')[:80]}",
+            )
 
     for iss in state.get("resolved_issues", []):
         if isinstance(iss, dict):
@@ -2310,7 +2322,7 @@ def collab_cleanup_history(
         af = _archive_file()
         if af.exists():
             try:
-                with open(af, "r", encoding="utf-8") as f:
+                with open(af, "r", encoding="utf-8-sig") as f:
                     arc = json.load(f)
             except Exception:
                 arc = {"notes": [], "completed_tasks": []}
@@ -2400,7 +2412,7 @@ def collab_export_state(
         cfg_file = proj_dir / "cli_config.json"
         if cfg_file.exists():
             try:
-                with open(cfg_file, "r", encoding="utf-8") as f:
+                with open(cfg_file, "r", encoding="utf-8-sig") as f:
                     payload["cli_config"] = json.load(f)
             except Exception:
                 payload["cli_config"] = None
@@ -2456,9 +2468,9 @@ def collab_import_state(
     if not in_path.exists():
         return f"エラー: ファイルが見つかりません: {in_path}"
 
-    # ファイルを読み込む
+    # ファイルを読み込む（issue-022: BOM付きUTF-8も許容）
     try:
-        with open(in_path, "r", encoding="utf-8") as f:
+        with open(in_path, "r", encoding="utf-8-sig") as f:
             payload = json.load(f)
     except Exception as e:
         return f"エラー: ファイルの読み込みに失敗しました: {e}"
@@ -2633,7 +2645,7 @@ def _print_help(version_only: bool = False) -> None:
 
 
 
-_VERSION = "1.0.14"
+_VERSION = "1.0.15"
 
 # ヘルプテキスト（AIが読むことを想定して日本語で詳述）
 _HELP_TEXT = f"""\
