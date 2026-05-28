@@ -59,9 +59,10 @@ def project(tmp_path):
 # ─── テスト ───────────────────────────────────────────────────────
 
 def test_doctor_normal_state_no_err(project):
-    """正常な state ではエラーが出ない（❌ ERR 行なし）。"""
+    """正常な state ではエラー・警告が出ない。"""
     result = server.collab_doctor(check_cli=False, check_ai_call=False)
-    assert "❌" not in result  # ERR: 0件はサマリー行に含まれるので絵文字で判定
+    assert "❌" not in result  # ERR 行なし
+    assert "⚠️" not in result  # WARN 行なし（false-positive 防止）
     assert "AI_STATE.json" in result
 
 

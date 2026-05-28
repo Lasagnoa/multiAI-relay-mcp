@@ -360,10 +360,11 @@ def collab_doctor(
                     warn("issues_bad_severity",
                          f"{list_key}: 無効な severity — {bad_sev}",
                          "collab_update_issue で P0/P1/P2/P3 に修正してください")
-                # 重複ID
+                # 重複ID（Counter で正確に集計）
+                from collections import Counter as _Counter
                 ids = [iss.get("id") for iss in dict_issues]
-                seen: set = set()
-                dups = [i for i in ids if i is not None and (i in seen or not seen.add(i))]  # type: ignore[func-returns-value]
+                id_counts = _Counter(i for i in ids if i is not None)
+                dups = [i for i, cnt in id_counts.items() if cnt > 1]
                 if dups:
                     warn("issues_duplicate_id",
                          f"{list_key}: 重複する issue ID — {list(dict.fromkeys(dups))}",
@@ -1971,7 +1972,7 @@ def _print_help(version_only: bool = False) -> None:
 
 
 
-_VERSION = "1.0.17"
+_VERSION = "1.0.18"
 
 # ヘルプテキスト（AIが読むことを想定して日本語で詳述）
 _HELP_TEXT = f"""\
