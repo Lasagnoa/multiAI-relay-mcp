@@ -9,12 +9,16 @@ import sys
 import tempfile
 import time
 from contextlib import contextmanager
+from contextvars import ContextVar
 from pathlib import Path
 
 #region 定数・プロジェクト解決
 
 # 現在のプロジェクトパス（プロセス内メモリのみ。ファイルへの書き出しはしない）
 _current_project: Path | None = None
+
+# project_path 指定時の一時上書き（ContextVar: 呼び出し1回限り、グローバルを汚さない）
+_project_override: ContextVar[Path | None] = ContextVar("_project_override", default=None)
 
 # デフォルトのCLI呼び出し設定
 DEFAULT_CLI_CONFIG: dict = {
@@ -88,30 +92,55 @@ VALID_HANDOFF_TEMPLATES = ["full", "minimal", "review", "debug"]
 
 #region プロジェクトディレクトリ解決
 
-def _get_project_dir() -> Path:
-    """
-    現在のプロジェクトディレクトリをメモリから取得する。
-
-    issue-006 短期対処: プロジェクトパスが削除・移動された場合も即座に検出する。
-    1プロセス=1アクティブプロジェクト前提の設計制限については README を参照。
-    """
-    if _current_project is None:
+def _validate_project_dir(p: Path, label: str = "プロジェクトパス") -> Path:
+    """パスが存在するディレクトリかどうかを検証して返す。失敗時は RuntimeError。"""
+    if not p.exists():
         raise RuntimeError(
-            "現在のプロジェクトが設定されていません。\n"
-            "collab_switch_project('プロジェクトのフルパス') を呼び出してください。"
-        )
-    if not _current_project.exists():
-        raise RuntimeError(
-            f"プロジェクトディレクトリが見つかりません: {_current_project}\n"
+            f"{label}が見つかりません: {p}\n"
             "ディレクトリが削除・移動された可能性があります。\n"
             "collab_switch_project() で正しいパスを再設定してください。"
         )
-    if not _current_project.is_dir():
+    if not p.is_dir():
         raise RuntimeError(
-            f"プロジェクトパスがディレクトリではありません: {_current_project}\n"
+            f"{label}がディレクトリではありません: {p}\n"
             "collab_switch_project() で正しいパスを再設定してください。"
         )
-    return _current_project
+    return p
+
+
+def _get_project_dir() -> Path:
+    """
+    現在のプロジェクトディレクトリを返す。解決順:
+
+    1. ContextVar override（project_path 付き呼び出し時）
+    2. _current_project（collab_switch_project で設定）
+    3. cwd 探索（AI_STATE.json が cwd または親に存在する場合のみ）
+
+    いずれも見つからない場合は RuntimeError。
+    """
+    # 1. ContextVar override
+    override = _project_override.get()
+    if override is not None:
+        return _validate_project_dir(override, "指定されたプロジェクトパス")
+
+    # 2. _current_project
+    if _current_project is not None:
+        return _validate_project_dir(_current_project, "プロジェクトディレクトリ")
+
+    # 3. cwd 探索（AI_STATE.json が cwd または祖先に存在する場合のみ採用）
+    candidate = Path.cwd()
+    while True:
+        if (candidate / "AI_STATE.json").exists() and candidate.is_dir():
+            return candidate
+        parent = candidate.parent
+        if parent == candidate:  # ルートに達した
+            break
+        candidate = parent
+
+    raise RuntimeError(
+        "現在のプロジェクトが設定されていません。\n"
+        "collab_switch_project('プロジェクトのフルパス') を呼び出してください。"
+    )
 
 def _state_file()   -> Path: return _get_project_dir() / "AI_STATE.json"
 def _handoff_file() -> Path: return _get_project_dir() / "HANDOFF.md"
@@ -568,6 +597,65 @@ def set_current_project(path: Path | None) -> None:
 def get_current_project_raw() -> Path | None:
     """Return the process-local active project path without validation."""
     return _current_project
+
+
+def _resolve_project_path(project_path: "str | Path") -> Path:
+    """
+    project_path 文字列を検証して Path に変換する。
+
+    存在しないパス・ファイルパスは RuntimeError。
+    """
+    resolved = Path(str(project_path)).expanduser().resolve()
+    if not resolved.exists():
+        raise RuntimeError(
+            f"指定されたプロジェクトパスが見つかりません: {resolved}\n"
+            "collab_switch_project() で正しいパスを先に登録してください。"
+        )
+    if not resolved.is_dir():
+        raise RuntimeError(
+            f"指定されたプロジェクトパスがディレクトリではありません: {resolved}\n"
+            "ディレクトリのパスを指定してください。"
+        )
+    return resolved
+
+
+@contextmanager
+def project_context(project_path: "str | Path | None" = None):
+    """
+    呼び出し1回限りのプロジェクト上書きコンテキストマネージャ。
+
+    project_path が None または空文字の場合は何もしない（既存 _current_project を使用）。
+    指定した場合、その呼び出し中だけ _project_override を設定し、グローバルは変更しない。
+    例外が発生しても ContextVar は必ずリセットされる。
+    """
+    if not project_path:
+        yield
+        return
+    resolved = _resolve_project_path(project_path)
+    token = _project_override.set(resolved)
+    try:
+        yield
+    finally:
+        _project_override.reset(token)
+
+
+def begin_project_override(project_path: "str | Path | None") -> "object | None":
+    """
+    project_context を使わず ContextVar を直接設定する（try/finally 用）。
+
+    project_path が空・None なら None を返す（end_project_override は no-op）。
+    戻り値のトークンは end_project_override に渡してリセットすること。
+    """
+    if not project_path:
+        return None
+    resolved = _resolve_project_path(project_path)
+    return _project_override.set(resolved)
+
+
+def end_project_override(token: "object | None") -> None:
+    """begin_project_override で得たトークンを使って ContextVar をリセットする。"""
+    if token is not None:
+        _project_override.reset(token)
 
 
 def read_raw_state_json(sf: Path) -> tuple[dict | None, bool, str | None]:

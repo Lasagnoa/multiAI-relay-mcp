@@ -168,59 +168,67 @@ def collab_switch_project(project_path: str, project_name: str = "") -> str:
 
 
 @mcp.tool()
-def collab_current_project() -> str:
+def collab_current_project(project_path: str = '') -> str:
     """現在アクティブなプロジェクトのパスと存在状態を確認する。"""
-    if state_mod.get_current_project_raw() is None:
-        return "現在のプロジェクトは設定されていません。collab_switch_project() を呼び出してください。"
-    if not state_mod.get_current_project_raw().exists():
-        return (
-            f"⚠️ プロジェクトディレクトリが見つかりません: {state_mod.get_current_project_raw()}\n"
-            "ディレクトリが削除・移動された可能性があります。\n"
-            "collab_switch_project() で正しいパスを再設定してください。"
-        )
-    if not state_mod.get_current_project_raw().is_dir():
-        return (
-            f"⚠️ 設定パスがディレクトリではありません: {state_mod.get_current_project_raw()}\n"
-            "collab_switch_project() で正しいパスを再設定してください。"
-        )
-    state_ok = (state_mod.get_current_project_raw() / "AI_STATE.json").exists()
-    return (
-        f"現在のプロジェクト: {state_mod.get_current_project_raw()}\n"
-        f"  状態ファイル: {'存在 ✅' if state_ok else '未作成 ⚠️（collab_switch_project で初期化してください）'}"
-    )
+    try:
+        with state_mod.project_context(project_path):
+            if state_mod.get_current_project_raw() is None:
+                return "現在のプロジェクトは設定されていません。collab_switch_project() を呼び出してください。"
+            if not state_mod.get_current_project_raw().exists():
+                return (
+                    f"⚠️ プロジェクトディレクトリが見つかりません: {state_mod.get_current_project_raw()}\n"
+                    "ディレクトリが削除・移動された可能性があります。\n"
+                    "collab_switch_project() で正しいパスを再設定してください。"
+                )
+            if not state_mod.get_current_project_raw().is_dir():
+                return (
+                    f"⚠️ 設定パスがディレクトリではありません: {state_mod.get_current_project_raw()}\n"
+                    "collab_switch_project() で正しいパスを再設定してください。"
+                )
+            state_ok = (state_mod.get_current_project_raw() / "AI_STATE.json").exists()
+            return (
+                f"現在のプロジェクト: {state_mod.get_current_project_raw()}\n"
+                f"  状態ファイル: {'存在 ✅' if state_ok else '未作成 ⚠️（collab_switch_project で初期化してください）'}"
+            )
+    except RuntimeError as _pp_e:
+        return f"エラー: {_pp_e}"
 
 #endregion
 
 #region MCPツール — 診断・情報
 
 @mcp.tool()
-def collab_version() -> str:
+def collab_version(project_path: str = '') -> str:
     """
     MCPサーバーと実行環境のバージョン情報を返す。
     """
-    project_path = str(state_mod.get_current_project_raw()) if state_mod.get_current_project_raw() else "（未設定）"
     try:
-        config_path     = str(_state_file())
-    except RuntimeError:
-        config_path     = "（未設定）"
-    try:
-        cli_config_path = str(_cli_config_file())
-    except RuntimeError:
-        cli_config_path = "（未設定）"
+        with state_mod.project_context(project_path):
+            project_path = str(state_mod.get_current_project_raw()) if state_mod.get_current_project_raw() else "（未設定）"
+            try:
+                config_path     = str(_state_file())
+            except RuntimeError:
+                config_path     = "（未設定）"
+            try:
+                cli_config_path = str(_cli_config_file())
+            except RuntimeError:
+                cli_config_path = "（未設定）"
 
-    lines = [
-        f"multiai-relay-mcp v{_VERSION}",
-        "",
-        f"パッケージバージョン    : {_VERSION}",
-        f"状態スキーマバージョン  : {_STATE_SCHEMA_VERSION}",
-        f"Python バージョン       : {sys.version.split()[0]}",
-        f"実行ファイル            : {sys.executable}",
-        "",
-        f"プロジェクトパス        : {project_path}",
-        f"AI_STATE.json           : {config_path}",
-        f"cli_config.json         : {cli_config_path}",
-    ]
-    return "\n".join(lines)
+            lines = [
+                f"multiai-relay-mcp v{_VERSION}",
+                "",
+                f"パッケージバージョン    : {_VERSION}",
+                f"状態スキーマバージョン  : {_STATE_SCHEMA_VERSION}",
+                f"Python バージョン       : {sys.version.split()[0]}",
+                f"実行ファイル            : {sys.executable}",
+                "",
+                f"プロジェクトパス        : {project_path}",
+                f"AI_STATE.json           : {config_path}",
+                f"cli_config.json         : {cli_config_path}",
+            ]
+            return "\n".join(lines)
+    except RuntimeError as _pp_e:
+        return f"エラー: {_pp_e}"
 
 
 @mcp.tool()
@@ -234,6 +242,7 @@ def collab_doctor(
     check_issues:   bool = True,
     check_recovery: bool = True,
     output:         str  = "text",
+    project_path: str = '',
 ) -> str:
     """
     MCPサーバーと実行環境の健全性を診断する。
@@ -249,251 +258,286 @@ def collab_doctor(
         check_recovery: アーカイブ・エクスポートファイルの確認（デフォルト: True）
         output:         出力形式 "text"（デフォルト）または "json"
     """
-    import time as _time
+    try:
+        with state_mod.project_context(project_path):
+            import time as _time
 
-    # 診断結果リスト（JSON出力と text 出力を共通で管理）
-    diagnostics: list[dict] = []
+            # 診断結果リスト（JSON出力と text 出力を共通で管理）
+            diagnostics: list[dict] = []
 
-    def _add(level: str, code: str, message: str, suggestion: str | None = None) -> None:
-        diagnostics.append({"level": level, "code": code, "message": message, "suggestion": suggestion})
+            def _add(level: str, code: str, message: str, suggestion: str | None = None) -> None:
+                diagnostics.append({"level": level, "code": code, "message": message, "suggestion": suggestion})
 
-    def ok(code: str, msg: str, sug: str | None = None)   -> None: _add("OK",   code, msg, sug)
-    def warn(code: str, msg: str, sug: str | None = None) -> None: _add("WARN", code, msg, sug)
-    def err(code: str, msg: str, sug: str | None = None)  -> None: _add("ERR",  code, msg, sug)
+            def ok(code: str, msg: str, sug: str | None = None)   -> None: _add("OK",   code, msg, sug)
+            def warn(code: str, msg: str, sug: str | None = None) -> None: _add("WARN", code, msg, sug)
+            def err(code: str, msg: str, sug: str | None = None)  -> None: _add("ERR",  code, msg, sug)
 
-    proj = state_mod.get_current_project_raw()
-    sf   = (proj / "AI_STATE.json") if proj and proj.exists() else None
+            # ContextVar override を優先して取得（project_path 指定時は override が有効）
+            try:
+                proj = _get_project_dir()
+            except RuntimeError:
+                proj = None
+            sf   = (proj / "AI_STATE.json") if proj and proj.exists() else None
 
-    #region プロジェクトフォルダ確認
-    if proj is None:
-        warn("project_unset", "プロジェクト未設定", "collab_switch_project() を呼んでください")
-    elif not proj.exists():
-        err("project_missing", f"プロジェクトフォルダが存在しない: {proj}",
-            "collab_switch_project() で正しいパスを再設定してください")
-    else:
-        ok("project_dir", f"プロジェクトフォルダ: {proj}")
-    #endregion
-
-    #region エンコーディング確認（BOM検出）
-    if check_encoding and sf and sf.exists():
-        raw_data, has_bom, raw_err = state_mod.read_raw_state_json(sf)
-        if raw_err:
-            err("encoding_parse", f"AI_STATE.json のパースに失敗: {raw_err}",
-                "collab_export_state/import_state replace で復旧できます")
-        elif has_bom:
-            warn("bom_detected", "AI_STATE.json に UTF-8 BOM が含まれています",
-                 "読み込みは可能ですが、次回保存時に自動でBOMなしへ正規化されます")
-        else:
-            ok("encoding_ok", "AI_STATE.json エンコーディング正常（BOMなし UTF-8）")
-    #endregion
-
-    #region スキーマ確認（raw JSON で正規化前の状態を検査）
-    if check_schema and sf and sf.exists():
-        raw_data, _, raw_err = state_mod.read_raw_state_json(sf)
-        if raw_data is not None:
-            # バージョン確認
-            raw_ver = raw_data.get("version", "(なし)")
-            if raw_ver != _STATE_SCHEMA_VERSION:
-                warn("schema_version",
-                     f"スキーマバージョン不一致: ファイル={raw_ver}, 期待={_STATE_SCHEMA_VERSION}",
-                     "collab_import_state validate で検証できます")
+            #region プロジェクトフォルダ確認
+            if proj is None:
+                warn("project_unset", "プロジェクト未設定", "collab_switch_project() を呼んでください")
+            elif not proj.exists():
+                err("project_missing", f"プロジェクトフォルダが存在しない: {proj}",
+                    "collab_switch_project() で正しいパスを再設定してください")
             else:
-                ok("schema_version", f"スキーマバージョン: {raw_ver}")
-            # 必須キー確認
-            missing = [k for k in _STATE_DEFAULTS if k not in raw_data]
-            if missing:
-                warn("schema_missing_keys",
-                     f"必須キーが欠落: {', '.join(missing)}",
-                     "collab_switch_project() で再接続すると自動補完されます")
-            # リスト型の型確認
-            bad_types = [
-                k for k, v in _STATE_DEFAULTS.items()
-                if isinstance(v, list) and k in raw_data and not isinstance(raw_data[k], list)
-            ]
-            if bad_types:
-                warn("schema_bad_types",
-                     f"型不一致（リストが期待されるキー）: {', '.join(bad_types)}",
-                     "AI_STATE.json を手動修正するか collab_import_state replace で復旧してください")
-            if not missing and not bad_types:
-                ok("schema_keys", "必須キーと型は正常")
-    #endregion
+                ok("project_dir", f"プロジェクトフォルダ: {proj}")
+            #endregion
 
-    #region 状態ファイル確認（_load_state 経由・正規化後）
-    if check_state and proj and proj.exists():
-        if not sf or not sf.exists():
-            warn("state_missing", "AI_STATE.json が未作成",
-                 "collab_switch_project() で新規作成できます")
-        else:
-            try:
-                loaded = _load_state()
-                ok("state_load",
-                   f"AI_STATE.json 正常"
-                   f" (担当: {loaded.get('current_ai','?').upper()}"
-                   f", セッション: #{loaded.get('session_count','?')})")
-            except Exception as e:
-                err("state_load_fail", f"AI_STATE.json 読み込み失敗: {e}",
-                    "collab_import_state replace で復旧できます")
-    #endregion
-
-    #region Issue 整合性確認（raw JSON で正規化前の状態を検査）
-    if check_issues and sf and sf.exists():
-        raw_data, _, _ = state_mod.read_raw_state_json(sf)
-        if raw_data is not None:
-            for list_key in ("known_issues", "resolved_issues"):
-                issues = raw_data.get(list_key, [])
-                if not isinstance(issues, list):
-                    continue
-                # 非dict要素（旧テキストフォーマット等）
-                non_dict_idx = [i for i, iss in enumerate(issues) if not isinstance(iss, dict)]
-                if non_dict_idx:
-                    warn("issues_non_dict",
-                         f"{list_key}[{non_dict_idx}]: dict でない要素あり（旧フォーマット）",
-                         "collab_switch_project() で再接続すると自動マイグレーションされます")
-                # 有効な dict issue のみ詳細検査
-                dict_issues = [iss for iss in issues if isinstance(iss, dict)]
-                # severity 不正値
-                bad_sev = [
-                    iss.get("id", "?") for iss in dict_issues
-                    if "severity" in iss and iss["severity"] not in VALID_SEVERITIES
-                ]
-                if bad_sev:
-                    warn("issues_bad_severity",
-                         f"{list_key}: 無効な severity — {bad_sev}",
-                         "collab_update_issue で P0/P1/P2/P3 に修正してください")
-                # 重複ID（Counter で正確に集計）
-                from collections import Counter as _Counter
-                ids = [iss.get("id") for iss in dict_issues]
-                id_counts = _Counter(i for i in ids if i is not None)
-                dups = [i for i, cnt in id_counts.items() if cnt > 1]
-                if dups:
-                    warn("issues_duplicate_id",
-                         f"{list_key}: 重複する issue ID — {list(dict.fromkeys(dups))}",
-                         "AI_STATE.json を手動確認して重複を解消してください")
-                # text / id フィールド検証（非文字列・空文字）
-                bad_text = [
-                    iss.get("id", f"[{_i}]") for _i, iss in enumerate(dict_issues)
-                    if not isinstance(iss.get("text"), str) or not str(iss.get("text", "")).strip()
-                ]
-                if bad_text:
-                    warn("issues_bad_text",
-                         f"{list_key}: text フィールドが空または非文字列 — {bad_text}",
-                         "AI_STATE.json を手動確認して text を文字列で設定してください")
-                # tags 形式検証 / related_files パス安全性検証
-                bad_tags: list = []
-                bad_files: list = []
-                for _i, _iss in enumerate(dict_issues):
-                    _iid = _iss.get("id", f"[{_i}]")
-                    _tv = _iss.get("tags")
-                    if _tv is not None:
-                        if not isinstance(_tv, list) or _validate_tags(_tv) is not None:
-                            bad_tags.append(_iid)
-                    _rv = _iss.get("related_files")
-                    if _rv is not None:
-                        if not isinstance(_rv, list) or _validate_related_files(_rv) is not None:
-                            bad_files.append(_iid)
-                if bad_tags:
-                    warn("issues_bad_tags",
-                         f"{list_key}: tags 形式不正 — {bad_tags}",
-                         "タグはスラッグ形式（英数字・ハイフン・アンダースコア）で指定してください")
-                if bad_files:
-                    warn("issues_bad_related_files",
-                         f"{list_key}: related_files に危険なパスあり — {bad_files}",
-                         "related_files はプロジェクト相対パスのみ。「..」や絶対パスは使用できません")
-                if not any([non_dict_idx, bad_sev, dups, bad_text, bad_tags, bad_files]):
-                    ok(f"issues_{list_key}", f"{list_key}: {len(issues)}件 正常")
-    #endregion
-
-    #region ロックファイル確認（PID生存確認・経過秒付き）
-    if check_lock and proj and proj.exists():
-        lock_file = proj / "AI_STATE.lock"
-        if lock_file.exists():
-            try:
-                text = lock_file.read_text(encoding="utf-8").strip()
-                pid  = int(text) if text.isdigit() else None
-                age  = int(_time.time() - lock_file.stat().st_mtime)
-                if pid is None:
-                    warn("lock_bad_content", f"ロックファイル内容が不正: {text!r}",
-                         "手動削除を検討: AI_STATE.lock")
-                elif _pid_exists(pid):
-                    warn("lock_alive",
-                         f"ロックファイルあり (PID {pid} は生存中, {age}秒経過)",
-                         "別プロセスが書き込み中の可能性")
+            #region エンコーディング確認（BOM検出）
+            if check_encoding and sf and sf.exists():
+                raw_data, has_bom, raw_err = state_mod.read_raw_state_json(sf)
+                if raw_err:
+                    err("encoding_parse", f"AI_STATE.json のパースに失敗: {raw_err}",
+                        "collab_export_state/import_state replace で復旧できます")
+                elif has_bom:
+                    warn("bom_detected", "AI_STATE.json に UTF-8 BOM が含まれています",
+                         "読み込みは可能ですが、次回保存時に自動でBOMなしへ正規化されます")
                 else:
-                    warn("lock_stale",
-                         f"古いロックファイル (PID {pid} は不在, {age}秒経過)",
-                         "次回書き込み時に自動解除されます")
-            except Exception as e:
-                warn("lock_parse_fail", f"ロックファイル解析失敗: {e}",
-                     "手動削除を検討: AI_STATE.lock")
-        else:
-            ok("lock_clean", "ロックファイルなし（正常）")
-    #endregion
+                    ok("encoding_ok", "AI_STATE.json エンコーディング正常（BOMなし UTF-8）")
+            #endregion
 
-    #region CLI コマンド確認
-    if check_cli:
-        config = _load_cli_config()
-        for ai_name in VALID_AI:
-            cfg  = config.get(ai_name, {})
-            cmd  = cfg.get("command", DEFAULT_CLI_CONFIG[ai_name]["command"])
-            path = _resolve_cli_path(ai_name, cmd)
-            if path:
-                ok(f"cli_{ai_name}", f"{ai_name.upper()} CLI: {path}")
-            else:
-                warn(f"cli_{ai_name}_missing", f"{ai_name.upper()} CLI 未検出 ({cmd})",
-                     "collab_setup_cli() で設定してください")
-    #endregion
+            #region スキーマ確認（raw JSON で正規化前の状態を検査）
+            if check_schema and sf and sf.exists():
+                raw_data, _, raw_err = state_mod.read_raw_state_json(sf)
+                if raw_data is not None:
+                    # バージョン確認
+                    raw_ver = raw_data.get("version", "(なし)")
+                    if raw_ver != _STATE_SCHEMA_VERSION:
+                        warn("schema_version",
+                             f"スキーマバージョン不一致: ファイル={raw_ver}, 期待={_STATE_SCHEMA_VERSION}",
+                             "collab_import_state validate で検証できます")
+                    else:
+                        ok("schema_version", f"スキーマバージョン: {raw_ver}")
+                    # 必須キー確認
+                    missing = [k for k in _STATE_DEFAULTS if k not in raw_data]
+                    if missing:
+                        warn("schema_missing_keys",
+                             f"必須キーが欠落: {', '.join(missing)}",
+                             "collab_switch_project() で再接続すると自動補完されます")
+                    # リスト型の型確認
+                    bad_types = [
+                        k for k, v in _STATE_DEFAULTS.items()
+                        if isinstance(v, list) and k in raw_data and not isinstance(raw_data[k], list)
+                    ]
+                    if bad_types:
+                        warn("schema_bad_types",
+                             f"型不一致（リストが期待されるキー）: {', '.join(bad_types)}",
+                             "AI_STATE.json を手動修正するか collab_import_state replace で復旧してください")
+                    if not missing and not bad_types:
+                        ok("schema_keys", "必須キーと型は正常")
+            #endregion
 
-    #region AI 呼び出し確認（高コスト・オプション）
-    if check_ai_call:
-        for ai_name in VALID_AI:
-            config = _load_cli_config()
-            cfg    = config.get(ai_name, {})
-            cmd    = cfg.get("command", DEFAULT_CLI_CONFIG[ai_name]["command"])
-            path   = _resolve_cli_path(ai_name, cmd)
-            if not path:
-                warn(f"ai_call_{ai_name}_skip",
-                     f"{ai_name.upper()} CLI 呼び出しテストをスキップ（コマンド未検出）")
-                continue
-            try:
-                ai_result = _call_ai_cli(ai_name, "ヘルスチェックです。「OK」とだけ答えてください。", timeout=30)
-                if ai_result.startswith("エラー"):
-                    warn(f"ai_call_{ai_name}_err", f"{ai_name.upper()} CLI 応答エラー: {ai_result[:80]}")
+            #region 状態ファイル確認（_load_state 経由・正規化後）
+            if check_state and proj and proj.exists():
+                if not sf or not sf.exists():
+                    warn("state_missing", "AI_STATE.json が未作成",
+                         "collab_switch_project() で新規作成できます")
                 else:
-                    ok(f"ai_call_{ai_name}", f"{ai_name.upper()} CLI 呼び出し成功")
-            except Exception as e:
-                err(f"ai_call_{ai_name}_exc", f"{ai_name.upper()} CLI 呼び出し例外: {e}")
-    #endregion
+                    try:
+                        loaded = _load_state()
+                        ok("state_load",
+                           f"AI_STATE.json 正常"
+                           f" (担当: {loaded.get('current_ai','?').upper()}"
+                           f", セッション: #{loaded.get('session_count','?')})")
+                    except Exception as e:
+                        err("state_load_fail", f"AI_STATE.json 読み込み失敗: {e}",
+                            "collab_import_state replace で復旧できます")
+            #endregion
 
-    #region 復旧関連ファイル確認
-    if check_recovery and proj and proj.exists():
-        archive = proj / "AI_STATE.archive.json"
-        if archive.exists():
-            size_kb = archive.stat().st_size // 1024
-            ok("recovery_archive", f"AI_STATE.archive.json あり ({size_kb}KB)")
-        exports = list(proj.glob("*.export.json"))
-        if exports:
-            ok("recovery_export", f"エクスポートファイル: {len(exports)}件")
-    #endregion
+            #region Issue 整合性確認（raw JSON で正規化前の状態を検査）
+            if check_issues and sf and sf.exists():
+                raw_data, _, _ = state_mod.read_raw_state_json(sf)
+                if raw_data is not None:
+                    for list_key in ("known_issues", "resolved_issues"):
+                        issues = raw_data.get(list_key, [])
+                        if not isinstance(issues, list):
+                            continue
+                        # 非dict要素（旧テキストフォーマット等）
+                        non_dict_idx = [i for i, iss in enumerate(issues) if not isinstance(iss, dict)]
+                        if non_dict_idx:
+                            warn("issues_non_dict",
+                                 f"{list_key}[{non_dict_idx}]: dict でない要素あり（旧フォーマット）",
+                                 "collab_switch_project() で再接続すると自動マイグレーションされます")
+                        # 有効な dict issue のみ詳細検査
+                        dict_issues = [iss for iss in issues if isinstance(iss, dict)]
+                        # severity 不正値
+                        bad_sev = [
+                            iss.get("id", "?") for iss in dict_issues
+                            if "severity" in iss and iss["severity"] not in VALID_SEVERITIES
+                        ]
+                        if bad_sev:
+                            warn("issues_bad_severity",
+                                 f"{list_key}: 無効な severity — {bad_sev}",
+                                 "collab_update_issue で P0/P1/P2/P3 に修正してください")
+                        # 重複ID（Counter で正確に集計）
+                        from collections import Counter as _Counter
+                        ids = [iss.get("id") for iss in dict_issues]
+                        id_counts = _Counter(i for i in ids if i is not None)
+                        dups = [i for i, cnt in id_counts.items() if cnt > 1]
+                        if dups:
+                            warn("issues_duplicate_id",
+                                 f"{list_key}: 重複する issue ID — {list(dict.fromkeys(dups))}",
+                                 "AI_STATE.json を手動確認して重複を解消してください")
+                        # text / id フィールド検証（非文字列・空文字）
+                        bad_text = [
+                            iss.get("id", f"[{_i}]") for _i, iss in enumerate(dict_issues)
+                            if not isinstance(iss.get("text"), str) or not str(iss.get("text", "")).strip()
+                        ]
+                        if bad_text:
+                            warn("issues_bad_text",
+                                 f"{list_key}: text フィールドが空または非文字列 — {bad_text}",
+                                 "AI_STATE.json を手動確認して text を文字列で設定してください")
+                        # tags 形式検証 / related_files パス安全性検証
+                        bad_tags: list = []
+                        bad_files: list = []
+                        for _i, _iss in enumerate(dict_issues):
+                            _iid = _iss.get("id", f"[{_i}]")
+                            _tv = _iss.get("tags")
+                            if _tv is not None:
+                                if not isinstance(_tv, list) or _validate_tags(_tv) is not None:
+                                    bad_tags.append(_iid)
+                            _rv = _iss.get("related_files")
+                            if _rv is not None:
+                                if not isinstance(_rv, list) or _validate_related_files(_rv) is not None:
+                                    bad_files.append(_iid)
+                        if bad_tags:
+                            warn("issues_bad_tags",
+                                 f"{list_key}: tags 形式不正 — {bad_tags}",
+                                 "タグはスラッグ形式（英数字・ハイフン・アンダースコア）で指定してください")
+                        if bad_files:
+                            warn("issues_bad_related_files",
+                                 f"{list_key}: related_files に危険なパスあり — {bad_files}",
+                                 "related_files はプロジェクト相対パスのみ。「..」や絶対パスは使用できません")
+                        # id フィールド検証（空文字・非文字列・スラッグ形式外）
+                        bad_id: list = []
+                        for _i, _iss in enumerate(dict_issues):
+                            _raw_id = _iss.get("id")
+                            _label  = _raw_id if isinstance(_raw_id, str) and _raw_id else f"[{_i}]"
+                            if not isinstance(_raw_id, str) or not _raw_id.strip():
+                                bad_id.append(_label)
+                            elif not _SLUG_RE.match(_raw_id):
+                                bad_id.append(_label)
+                        if bad_id:
+                            warn("issues_bad_id",
+                                 f"{list_key}: id フィールドが空・非文字列またはスラッグ形式外 — {bad_id}",
+                                 "id は英数字・ハイフン・アンダースコアのみの非空文字列にしてください")
+                        # category フィールド検証（スラッグ形式・長さチェック）
+                        bad_cat: list = []
+                        for _i, _iss in enumerate(dict_issues):
+                            _cat = _iss.get("category")
+                            _iid = _iss.get("id", f"[{_i}]")
+                            if _cat is not None:
+                                if not isinstance(_cat, str) or not _cat.strip():
+                                    bad_cat.append(_iid)
+                                elif not _SLUG_RE.match(_cat) or len(_cat) > _MAX_CATEGORY_LEN:
+                                    bad_cat.append(_iid)
+                        if bad_cat:
+                            warn("issues_bad_category",
+                                 f"{list_key}: category フィールドが不正 — {bad_cat}",
+                                 "category は slug 形式（英数字・ハイフン・アンダースコア）で指定してください")
+                        if not any([non_dict_idx, bad_sev, dups, bad_text, bad_id, bad_cat, bad_tags, bad_files]):
+                            ok(f"issues_{list_key}", f"{list_key}: {len(issues)}件 正常")
+            #endregion
 
-    #region 出力
-    ok_count   = sum(1 for d in diagnostics if d["level"] == "OK")
-    warn_count = sum(1 for d in diagnostics if d["level"] == "WARN")
-    err_count  = sum(1 for d in diagnostics if d["level"] == "ERR")
+            #region ロックファイル確認（PID生存確認・経過秒付き）
+            if check_lock and proj and proj.exists():
+                lock_file = proj / "AI_STATE.lock"
+                if lock_file.exists():
+                    try:
+                        text = lock_file.read_text(encoding="utf-8").strip()
+                        pid  = int(text) if text.isdigit() else None
+                        age  = int(_time.time() - lock_file.stat().st_mtime)
+                        if pid is None:
+                            warn("lock_bad_content", f"ロックファイル内容が不正: {text!r}",
+                                 "手動削除を検討: AI_STATE.lock")
+                        elif _pid_exists(pid):
+                            warn("lock_alive",
+                                 f"ロックファイルあり (PID {pid} は生存中, {age}秒経過)",
+                                 "別プロセスが書き込み中の可能性")
+                        else:
+                            warn("lock_stale",
+                                 f"古いロックファイル (PID {pid} は不在, {age}秒経過)",
+                                 "次回書き込み時に自動解除されます")
+                    except Exception as e:
+                        warn("lock_parse_fail", f"ロックファイル解析失敗: {e}",
+                             "手動削除を検討: AI_STATE.lock")
+                else:
+                    ok("lock_clean", "ロックファイルなし（正常）")
+            #endregion
 
-    if output == "json":
-        return json.dumps(
-            {"summary": {"ok": ok_count, "warn": warn_count, "err": err_count},
-             "diagnostics": diagnostics},
-            ensure_ascii=False, indent=2,
-        )
+            #region CLI コマンド確認
+            if check_cli:
+                config = _load_cli_config()
+                for ai_name in VALID_AI:
+                    cfg  = config.get(ai_name, {})
+                    cmd  = cfg.get("command", DEFAULT_CLI_CONFIG[ai_name]["command"])
+                    path = _resolve_cli_path(ai_name, cmd)
+                    if path:
+                        ok(f"cli_{ai_name}", f"{ai_name.upper()} CLI: {path}")
+                    else:
+                        warn(f"cli_{ai_name}_missing", f"{ai_name.upper()} CLI 未検出 ({cmd})",
+                             "collab_setup_cli() で設定してください")
+            #endregion
 
-    _EMOJI = {"OK": "✅ OK  ", "WARN": "⚠️ WARN", "ERR": "❌ ERR "}
-    lines = [f"# 診断結果 — OK: {ok_count}件  WARN: {warn_count}件  ERR: {err_count}件"]
-    for d in diagnostics:
-        prefix = _EMOJI.get(d["level"], d["level"])
-        sug    = f" → {d['suggestion']}" if d.get("suggestion") else ""
-        lines.append(f"{prefix}  {d['message']}{sug}")
-    return "\n".join(lines)
+            #region AI 呼び出し確認（高コスト・オプション）
+            if check_ai_call:
+                for ai_name in VALID_AI:
+                    config = _load_cli_config()
+                    cfg    = config.get(ai_name, {})
+                    cmd    = cfg.get("command", DEFAULT_CLI_CONFIG[ai_name]["command"])
+                    path   = _resolve_cli_path(ai_name, cmd)
+                    if not path:
+                        warn(f"ai_call_{ai_name}_skip",
+                             f"{ai_name.upper()} CLI 呼び出しテストをスキップ（コマンド未検出）")
+                        continue
+                    try:
+                        ai_result = _call_ai_cli(ai_name, "ヘルスチェックです。「OK」とだけ答えてください。", timeout=30)
+                        if ai_result.startswith("エラー"):
+                            warn(f"ai_call_{ai_name}_err", f"{ai_name.upper()} CLI 応答エラー: {ai_result[:80]}")
+                        else:
+                            ok(f"ai_call_{ai_name}", f"{ai_name.upper()} CLI 呼び出し成功")
+                    except Exception as e:
+                        err(f"ai_call_{ai_name}_exc", f"{ai_name.upper()} CLI 呼び出し例外: {e}")
+            #endregion
+
+            #region 復旧関連ファイル確認
+            if check_recovery and proj and proj.exists():
+                archive = proj / "AI_STATE.archive.json"
+                if archive.exists():
+                    size_kb = archive.stat().st_size // 1024
+                    ok("recovery_archive", f"AI_STATE.archive.json あり ({size_kb}KB)")
+                exports = list(proj.glob("*.export.json"))
+                if exports:
+                    ok("recovery_export", f"エクスポートファイル: {len(exports)}件")
+            #endregion
+
+            #region 出力
+            ok_count   = sum(1 for d in diagnostics if d["level"] == "OK")
+            warn_count = sum(1 for d in diagnostics if d["level"] == "WARN")
+            err_count  = sum(1 for d in diagnostics if d["level"] == "ERR")
+
+            if output == "json":
+                return json.dumps(
+                    {"summary": {"ok": ok_count, "warn": warn_count, "err": err_count},
+                     "diagnostics": diagnostics},
+                    ensure_ascii=False, indent=2,
+                )
+
+            _EMOJI = {"OK": "✅ OK  ", "WARN": "⚠️ WARN", "ERR": "❌ ERR "}
+            lines = [f"# 診断結果 — OK: {ok_count}件  WARN: {warn_count}件  ERR: {err_count}件"]
+            for d in diagnostics:
+                prefix = _EMOJI.get(d["level"], d["level"])
+                sug    = f" → {d['suggestion']}" if d.get("suggestion") else ""
+                lines.append(f"{prefix}  {d['message']}{sug}")
+            return "\n".join(lines)
+    except RuntimeError as _pp_e:
+        return f"エラー: {_pp_e}"
     #endregion
 
 #endregion
@@ -501,7 +545,7 @@ def collab_doctor(
 #region MCPツール — 状態管理
 
 @mcp.tool()
-def collab_status(calling_ai: str = "") -> str:
+def collab_status(calling_ai: str = "", project_path: str = '') -> str:
     """
     現在の協働開発状態を取得する。
 
@@ -511,82 +555,86 @@ def collab_status(calling_ai: str = "") -> str:
     Args:
         calling_ai: 呼び出し元のAI（"claude" / "codex"）。指定すると担当AI不一致を警告する。
     """
-    state = _load_state()
+    try:
+        with state_mod.project_context(project_path):
+            state = _load_state()
 
-    lines = [
-        "# AI協働開発 現在の状態",
-        f"プロジェクト : {state['project_name']}",
-        f"パス         : {_get_project_dir()}",
-        f"担当AI       : {state['current_ai'].upper()}",
-        f"モード       : {MODE_LABELS.get(state['mode'], state['mode'])}",
-        f"セッション   : #{state['session_count']}",
-        f"最終更新     : {state['last_updated']}",
-    ]
+            lines = [
+                "# AI協働開発 現在の状態",
+                f"プロジェクト : {state['project_name']}",
+                f"パス         : {_get_project_dir()}",
+                f"担当AI       : {state['current_ai'].upper()}",
+                f"モード       : {MODE_LABELS.get(state['mode'], state['mode'])}",
+                f"セッション   : #{state['session_count']}",
+                f"最終更新     : {state['last_updated']}",
+            ]
 
-    # 担当AI不一致の警告
-    if calling_ai and calling_ai in VALID_AI and calling_ai != state.get("current_ai"):
-        lines = [
-            "⚠️ 担当AI不一致の警告",
-            f"  現在の担当: {state['current_ai'].upper()}",
-            f"  呼び出し元: {calling_ai.upper()}",
-            "  → 必要なら collab_generate_handoff() で担当AIを切り替えてください。",
-            "",
-        ] + lines
+            # 担当AI不一致の警告
+            if calling_ai and calling_ai in VALID_AI and calling_ai != state.get("current_ai"):
+                lines = [
+                    "⚠️ 担当AI不一致の警告",
+                    f"  現在の担当: {state['current_ai'].upper()}",
+                    f"  呼び出し元: {calling_ai.upper()}",
+                    "  → 必要なら collab_generate_handoff() で担当AIを切り替えてください。",
+                    "",
+                ] + lines
 
-    lines += ["", "## 現在のタスク"]
-    if state.get("current_task"):
-        task = state["current_task"]
-        lines += [f"ID      : {task['id']}", f"タイトル: {task['title']}"]
-        if task.get("description"):
-            lines.append(f"詳細    : {task['description']}")
-        lines.append(f"開始    : {task['started_at'][:16]}  担当: {task.get('started_by', '?').upper()}")
-        if task.get("files_modified"):
-            lines.append("変更済みファイル:")
-            for fp in task["files_modified"]:
-                lines.append(f"  - {fp}")
-    else:
-        lines.append("未設定")
-
-    if state.get("pending_tasks"):
-        lines += ["", "## 保留中のタスク"]
-        for t in state["pending_tasks"]:
-            lines.append(f"- [{t['id']}] {t['title']}")
-
-    if state.get("notes"):
-        lines += ["", "## 最近のメモ（最新5件）"]
-        for n in state["notes"][-5:]:
-            lines.append(f"- [{n['timestamp'][:16]}] ({n['ai'].upper()}) {n['text']}")
-
-    if state.get("key_decisions"):
-        lines += ["", "## 重要な決定事項"]
-        for dec in state["key_decisions"]:
-            lines.append(f"- [{dec['timestamp'][:10]}] {dec['title']}: {dec['content'][:100]}")
-
-    if state.get("known_issues"):
-        lines += ["", "## 既知の問題・注意点"]
-        # severity 昇順（P0優先）でソート
-        sorted_issues = sorted(
-            state["known_issues"],
-            key=lambda i: VALID_SEVERITIES.index(i.get("severity", "P2"))
-            if isinstance(i, dict) and i.get("severity") in VALID_SEVERITIES else 99
-        )
-        for issue in sorted_issues:
-            if isinstance(issue, dict):
-                emoji = _SEVERITY_EMOJI.get(issue.get("severity", "P2"), "")
-                sev   = issue.get("severity", "P2")
-                stat  = "" if issue.get("status", "open") == "open" else f" [{issue['status']}]"
-                tags  = f" ({', '.join(issue['tags'])})" if issue.get("tags") else ""
-                # 旧テキストに [P0]〜[P3] プレフィックスが残っている場合は表示上だけ除去する
-                text  = re.sub(r'^\[P[0-3]\]\s*', '', issue['text'])
-                lines.append(f"- {emoji} [{issue['id']}][{sev}]{stat} {text}{tags}")
+            lines += ["", "## 現在のタスク"]
+            if state.get("current_task"):
+                task = state["current_task"]
+                lines += [f"ID      : {task['id']}", f"タイトル: {task['title']}"]
+                if task.get("description"):
+                    lines.append(f"詳細    : {task['description']}")
+                lines.append(f"開始    : {task['started_at'][:16]}  担当: {task.get('started_by', '?').upper()}")
+                if task.get("files_modified"):
+                    lines.append("変更済みファイル:")
+                    for fp in task["files_modified"]:
+                        lines.append(f"  - {fp}")
             else:
-                lines.append(f"- {issue}")
+                lines.append("未設定")
 
-    return "\n".join(lines)
+            if state.get("pending_tasks"):
+                lines += ["", "## 保留中のタスク"]
+                for t in state["pending_tasks"]:
+                    lines.append(f"- [{t['id']}] {t['title']}")
+
+            if state.get("notes"):
+                lines += ["", "## 最近のメモ（最新5件）"]
+                for n in state["notes"][-5:]:
+                    lines.append(f"- [{n['timestamp'][:16]}] ({n['ai'].upper()}) {n['text']}")
+
+            if state.get("key_decisions"):
+                lines += ["", "## 重要な決定事項"]
+                for dec in state["key_decisions"]:
+                    lines.append(f"- [{dec['timestamp'][:10]}] {dec['title']}: {dec['content'][:100]}")
+
+            if state.get("known_issues"):
+                lines += ["", "## 既知の問題・注意点"]
+                # severity 昇順（P0優先）でソート
+                sorted_issues = sorted(
+                    state["known_issues"],
+                    key=lambda i: VALID_SEVERITIES.index(i.get("severity", "P2"))
+                    if isinstance(i, dict) and i.get("severity") in VALID_SEVERITIES else 99
+                )
+                for issue in sorted_issues:
+                    if isinstance(issue, dict):
+                        emoji = _SEVERITY_EMOJI.get(issue.get("severity", "P2"), "")
+                        sev   = issue.get("severity", "P2")
+                        stat  = "" if issue.get("status", "open") == "open" else f" [{issue['status']}]"
+                        tags  = f" ({', '.join(issue['tags'])})" if issue.get("tags") else ""
+                        # 旧テキストに [P0]〜[P3] プレフィックスが残っている場合は表示上だけ除去する
+                        text  = re.sub(r'^\[P[0-3]\]\s*', '', issue['text'])
+                        lines.append(f"- {emoji} [{issue['id']}][{sev}]{stat} {text}{tags}")
+                    else:
+                        lines.append(f"- {issue}")
+
+            return "\n".join(lines)
+    except RuntimeError as _pp_e:
+        return f"エラー: {_pp_e}"
 
 
 @mcp.tool()
-def collab_set_task(title: str, description: str = "") -> str:
+def collab_set_task(title: str, description: str = "", project_path: str = '') -> str:
     """
     現在のタスクを設定する。既存のタスクは自動的に完了済みに移動する。
 
@@ -594,46 +642,54 @@ def collab_set_task(title: str, description: str = "") -> str:
         title: タスクのタイトル
         description: タスクの詳細説明（省略可）
     """
-    err = _validate_input(title, "title") or (description and _validate_input(description, "description"))
-    if err:
-        return err
-    with _state_transaction() as state:
-        if state.get("current_task"):
-            old = state["current_task"]
-            old["completed_at"] = _now_iso()
-            state["completed_tasks"].append(old)
+    try:
+        with state_mod.project_context(project_path):
+            err = _validate_input(title, "title") or (description and _validate_input(description, "description"))
+            if err:
+                return err
+            with _state_transaction() as state:
+                if state.get("current_task"):
+                    old = state["current_task"]
+                    old["completed_at"] = _now_iso()
+                    state["completed_tasks"].append(old)
 
-        task_id = f"task-{len(state['completed_tasks']) + 1:03d}"
-        state["current_task"] = {
-            "id": task_id, "title": title, "description": description,
-            "started_at": _now_iso(), "started_by": state["current_ai"],
-            "files_modified": [],
-        }
-        ai = state["current_ai"]
-    _append_session_log(ai, f"タスク開始: [{task_id}] {title}")
-    return f"タスクを設定しました: [{task_id}] {title}"
+                task_id = f"task-{len(state['completed_tasks']) + 1:03d}"
+                state["current_task"] = {
+                    "id": task_id, "title": title, "description": description,
+                    "started_at": _now_iso(), "started_by": state["current_ai"],
+                    "files_modified": [],
+                }
+                ai = state["current_ai"]
+            _append_session_log(ai, f"タスク開始: [{task_id}] {title}")
+            return f"タスクを設定しました: [{task_id}] {title}"
+    except RuntimeError as _pp_e:
+        return f"エラー: {_pp_e}"
 
 
 @mcp.tool()
-def collab_add_note(message: str) -> str:
+def collab_add_note(message: str, project_path: str = '') -> str:
     """
     作業メモを追加する。こまめに呼び出すことでハンドオフ精度が上がる。
 
     Args:
         message: メモの内容
     """
-    err = _validate_input(message, "message")
-    if err:
-        return err
-    with _state_transaction() as state:
-        state["notes"].append({"timestamp": _now_iso(), "ai": state["current_ai"], "text": message})
-        ai = state["current_ai"]
-    _append_session_log(ai, f"メモ: {message}")
-    return f"メモを追加しました: {message}"
+    try:
+        with state_mod.project_context(project_path):
+            err = _validate_input(message, "message")
+            if err:
+                return err
+            with _state_transaction() as state:
+                state["notes"].append({"timestamp": _now_iso(), "ai": state["current_ai"], "text": message})
+                ai = state["current_ai"]
+            _append_session_log(ai, f"メモ: {message}")
+            return f"メモを追加しました: {message}"
+    except RuntimeError as _pp_e:
+        return f"エラー: {_pp_e}"
 
 
 @mcp.tool()
-def collab_record_decision(title: str, content: str) -> str:
+def collab_record_decision(title: str, content: str, project_path: str = '') -> str:
     """
     重要な設計・実装の決定事項を記録する。
 
@@ -641,17 +697,21 @@ def collab_record_decision(title: str, content: str) -> str:
         title: 決定事項のタイトル
         content: 決定内容と理由
     """
-    err = _validate_input(title, "title") or _validate_input(content, "content")
-    if err:
-        return err
-    with _state_transaction() as state:
-        state["key_decisions"].append({
-            "timestamp": _now_iso(), "ai": state["current_ai"],
-            "title": title, "content": content,
-        })
-        ai = state["current_ai"]
-    _append_session_log(ai, f"決定事項記録: {title}")
-    return f"決定事項を記録しました: {title}"
+    try:
+        with state_mod.project_context(project_path):
+            err = _validate_input(title, "title") or _validate_input(content, "content")
+            if err:
+                return err
+            with _state_transaction() as state:
+                state["key_decisions"].append({
+                    "timestamp": _now_iso(), "ai": state["current_ai"],
+                    "title": title, "content": content,
+                })
+                ai = state["current_ai"]
+            _append_session_log(ai, f"決定事項記録: {title}")
+            return f"決定事項を記録しました: {title}"
+    except RuntimeError as _pp_e:
+        return f"エラー: {_pp_e}"
 
 
 @mcp.tool()
@@ -661,6 +721,7 @@ def collab_record_issue(
     category: str = "general",
     tags: list | None = None,
     related_files: list | None = None,
+    project_path: str = '',
 ) -> str:
     """
     既知の問題・バグ・注意点を記録する。
@@ -672,49 +733,53 @@ def collab_record_issue(
         tags:          タグリスト（省略可、例: ["routing", "login"]）
         related_files: 関連ファイルのプロジェクト相対パスリスト（省略可）
     """
-    tags         = tags or []
-    related_files = related_files or []
+    try:
+        with state_mod.project_context(project_path):
+            tags         = tags or []
+            related_files = related_files or []
 
-    # 入力検証
-    err = (_validate_input(message, "message")
-           or (severity not in VALID_SEVERITIES and f"エラー: severity は {VALID_SEVERITIES} のいずれかを指定してください。")
-           or (not _SLUG_RE.match(category) and f"エラー: category はslug形式（英数字・ハイフン・アンダースコア）で指定してください: {category!r}")
-           or (len(category) > _MAX_CATEGORY_LEN and f"エラー: category は最大{_MAX_CATEGORY_LEN}文字です。")
-           or _validate_tags(tags)
-           or _validate_related_files(related_files))
-    if err:
-        return err
+            # 入力検証
+            err = (_validate_input(message, "message")
+                   or (severity not in VALID_SEVERITIES and f"エラー: severity は {VALID_SEVERITIES} のいずれかを指定してください。")
+                   or (not _SLUG_RE.match(category) and f"エラー: category はslug形式（英数字・ハイフン・アンダースコア）で指定してください: {category!r}")
+                   or (len(category) > _MAX_CATEGORY_LEN and f"エラー: category は最大{_MAX_CATEGORY_LEN}文字です。")
+                   or _validate_tags(tags)
+                   or _validate_related_files(related_files))
+            if err:
+                return err
 
-    with _state_transaction() as state:
-        # 既存・解決済み両方のIDを参照して単調増加IDを採番
-        all_issues = state.get("known_issues", []) + state.get("resolved_issues", [])
-        issue_numbers = [
-            int(iss["id"].split("-")[-1])
-            for iss in all_issues
-            if isinstance(iss, dict)
-            and iss.get("id", "").startswith("issue-")
-            and iss["id"].split("-")[-1].isdigit()
-        ]
-        issue_id = f"issue-{max(issue_numbers, default=0) + 1:03d}"
-        state["known_issues"].append({
-            "id":            issue_id,
-            "text":          message,
-            "severity":      severity,
-            "category":      category,
-            "tags":          tags,
-            "related_files": related_files,
-            "status":        "open",
-            "added_at":      _now_iso(),
-            "added_by":      state["current_ai"],
-        })
-        ai = state["current_ai"]
-    emoji = _SEVERITY_EMOJI.get(severity, "")
-    _append_session_log(ai, f"問題記録: [{issue_id}][{severity}] {message}")
-    return f"問題を記録しました: {emoji} [{issue_id}][{severity}] {message}"
+            with _state_transaction() as state:
+                # 既存・解決済み両方のIDを参照して単調増加IDを採番
+                all_issues = state.get("known_issues", []) + state.get("resolved_issues", [])
+                issue_numbers = [
+                    int(iss["id"].split("-")[-1])
+                    for iss in all_issues
+                    if isinstance(iss, dict)
+                    and iss.get("id", "").startswith("issue-")
+                    and iss["id"].split("-")[-1].isdigit()
+                ]
+                issue_id = f"issue-{max(issue_numbers, default=0) + 1:03d}"
+                state["known_issues"].append({
+                    "id":            issue_id,
+                    "text":          message,
+                    "severity":      severity,
+                    "category":      category,
+                    "tags":          tags,
+                    "related_files": related_files,
+                    "status":        "open",
+                    "added_at":      _now_iso(),
+                    "added_by":      state["current_ai"],
+                })
+                ai = state["current_ai"]
+            emoji = _SEVERITY_EMOJI.get(severity, "")
+            _append_session_log(ai, f"問題記録: [{issue_id}][{severity}] {message}")
+            return f"問題を記録しました: {emoji} [{issue_id}][{severity}] {message}"
+    except RuntimeError as _pp_e:
+        return f"エラー: {_pp_e}"
 
 
 @mcp.tool()
-def collab_resolve_issue(issue_id: str, note: str = "") -> str:
+def collab_resolve_issue(issue_id: str, note: str = "", project_path: str = '') -> str:
     """
     既知の問題を解決済みにして一覧から取り除く。
 
@@ -722,34 +787,38 @@ def collab_resolve_issue(issue_id: str, note: str = "") -> str:
         issue_id: 解決する問題のID（例: issue-001）。collab_status で確認できる。
         note: 解決内容の補足（省略可）
     """
-    # issue-016: note の入力検証
-    if note:
-        err = _validate_input(note, "note")
-        if err:
-            return err
-    # issue-014: issue_id の存在チェックを transaction 外で先に行う
-    pre = _load_state()
-    if not any(isinstance(i, dict) and i.get("id") == issue_id for i in pre.get("known_issues", [])):
-        return f"エラー: 問題が見つかりません: {issue_id}（collab_status で ID を確認してください）"
+    try:
+        with state_mod.project_context(project_path):
+            # issue-016: note の入力検証
+            if note:
+                err = _validate_input(note, "note")
+                if err:
+                    return err
+            # issue-014: issue_id の存在チェックを transaction 外で先に行う
+            pre = _load_state()
+            if not any(isinstance(i, dict) and i.get("id") == issue_id for i in pre.get("known_issues", [])):
+                return f"エラー: 問題が見つかりません: {issue_id}（collab_status で ID を確認してください）"
 
-    with _state_transaction() as state:
-        issues = state.get("known_issues", [])
-        matched_index = next(
-            (i for i, iss in enumerate(issues)
-             if isinstance(iss, dict) and iss.get("id") == issue_id),
-            None,
-        )
-        if matched_index is None:
-            return f"エラー: 問題が見つかりません: {issue_id}（collab_status で ID を確認してください）"
-        issue = issues.pop(matched_index)
-        issue["resolved_at"] = _now_iso()
-        issue["resolved_by"] = state["current_ai"]
-        if note:
-            issue["resolution_note"] = note
-        state.setdefault("resolved_issues", []).append(issue)
-        ai = state["current_ai"]
-    _append_session_log(ai, f"問題解決: [{issue_id}] {issue['text'][:60]}")
-    return f"問題を解決済みにしました: [{issue_id}] {issue['text']}"
+            with _state_transaction() as state:
+                issues = state.get("known_issues", [])
+                matched_index = next(
+                    (i for i, iss in enumerate(issues)
+                     if isinstance(iss, dict) and iss.get("id") == issue_id),
+                    None,
+                )
+                if matched_index is None:
+                    return f"エラー: 問題が見つかりません: {issue_id}（collab_status で ID を確認してください）"
+                issue = issues.pop(matched_index)
+                issue["resolved_at"] = _now_iso()
+                issue["resolved_by"] = state["current_ai"]
+                if note:
+                    issue["resolution_note"] = note
+                state.setdefault("resolved_issues", []).append(issue)
+                ai = state["current_ai"]
+            _append_session_log(ai, f"問題解決: [{issue_id}] {issue['text'][:60]}")
+            return f"問題を解決済みにしました: [{issue_id}] {issue['text']}"
+    except RuntimeError as _pp_e:
+        return f"エラー: {_pp_e}"
 
 
 @mcp.tool()
@@ -765,6 +834,7 @@ def collab_update_issue(
     add_related_files: list | None = None,
     remove_related_files: list | None = None,
     status: str | None = None,
+    project_path: str = '',
 ) -> str:
     """
     既存の未解決 issue のメタデータを更新する。
@@ -784,182 +854,198 @@ def collab_update_issue(
         remove_related_files:関連ファイルを削除（related_files と同時指定不可）
         status:              "open" / "deferred" に変更（省略で変更なし）
     """
-    # 排他チェック
-    if tags is not None and (add_tags is not None or remove_tags is not None):
-        return "エラー: tags と add_tags/remove_tags は同時に指定できません。"
-    if related_files is not None and (add_related_files is not None or remove_related_files is not None):
-        return "エラー: related_files と add_related_files/remove_related_files は同時に指定できません。"
+    try:
+        with state_mod.project_context(project_path):
+            # 排他チェック
+            if tags is not None and (add_tags is not None or remove_tags is not None):
+                return "エラー: tags と add_tags/remove_tags は同時に指定できません。"
+            if related_files is not None and (add_related_files is not None or remove_related_files is not None):
+                return "エラー: related_files と add_related_files/remove_related_files は同時に指定できません。"
 
-    # 入力検証
-    if message is not None:
-        err = _validate_input(message, "message")
-        if err:
-            return err
-    if severity is not None and severity not in VALID_SEVERITIES:
-        return f"エラー: severity は {VALID_SEVERITIES} のいずれかを指定してください。"
-    if category is not None:
-        if not _SLUG_RE.match(category):
-            return f"エラー: category はslug形式で指定してください: {category!r}"
-        if len(category) > _MAX_CATEGORY_LEN:
-            return f"エラー: category は最大{_MAX_CATEGORY_LEN}文字です。"
-    if status is not None and status not in VALID_ISSUE_STATUSES:
-        return f"エラー: status は {VALID_ISSUE_STATUSES} のいずれかを指定してください（resolved 化は collab_resolve_issue を使ってください）。"
-    for tag_list, label in [(tags, "tags"), (add_tags, "add_tags"), (remove_tags, "remove_tags")]:
-        if tag_list is not None:
-            err = _validate_tags(tag_list, label)
-            if err:
-                return err
-    for file_list, label in [(related_files, "related_files"),
-                              (add_related_files, "add_related_files"),
-                              (remove_related_files, "remove_related_files")]:
-        if file_list is not None:
-            err = _validate_related_files(file_list)
-            if err:
-                return err
+            # 入力検証
+            if message is not None:
+                err = _validate_input(message, "message")
+                if err:
+                    return err
+            if severity is not None and severity not in VALID_SEVERITIES:
+                return f"エラー: severity は {VALID_SEVERITIES} のいずれかを指定してください。"
+            if category is not None:
+                if not _SLUG_RE.match(category):
+                    return f"エラー: category はslug形式で指定してください: {category!r}"
+                if len(category) > _MAX_CATEGORY_LEN:
+                    return f"エラー: category は最大{_MAX_CATEGORY_LEN}文字です。"
+            if status is not None and status not in VALID_ISSUE_STATUSES:
+                return f"エラー: status は {VALID_ISSUE_STATUSES} のいずれかを指定してください（resolved 化は collab_resolve_issue を使ってください）。"
+            for tag_list, label in [(tags, "tags"), (add_tags, "add_tags"), (remove_tags, "remove_tags")]:
+                if tag_list is not None:
+                    err = _validate_tags(tag_list, label)
+                    if err:
+                        return err
+            for file_list, label in [(related_files, "related_files"),
+                                      (add_related_files, "add_related_files"),
+                                      (remove_related_files, "remove_related_files")]:
+                if file_list is not None:
+                    err = _validate_related_files(file_list)
+                    if err:
+                        return err
 
-    # issue-014: 存在チェックを transaction 外で先に行う
-    pre = _load_state()
-    if not any(isinstance(i, dict) and i.get("id") == issue_id for i in pre.get("known_issues", [])):
-        return f"エラー: 未解決の問題が見つかりません: {issue_id}（解決済み issue は更新不可）"
+            # issue-014: 存在チェックを transaction 外で先に行う
+            pre = _load_state()
+            if not any(isinstance(i, dict) and i.get("id") == issue_id for i in pre.get("known_issues", [])):
+                return f"エラー: 未解決の問題が見つかりません: {issue_id}（解決済み issue は更新不可）"
 
-    with _state_transaction() as state:
-        issue = next(
-            (i for i in state.get("known_issues", [])
-             if isinstance(i, dict) and i.get("id") == issue_id),
-            None,
-        )
-        if issue is None:
-            return f"エラー: 問題が見つかりません: {issue_id}"
+            with _state_transaction() as state:
+                issue = next(
+                    (i for i in state.get("known_issues", [])
+                     if isinstance(i, dict) and i.get("id") == issue_id),
+                    None,
+                )
+                if issue is None:
+                    return f"エラー: 問題が見つかりません: {issue_id}"
 
-        if message is not None:
-            issue["text"] = message
-        if severity is not None:
-            issue["severity"] = severity
-        if category is not None:
-            issue["category"] = category
-        if status is not None:
-            issue["status"] = status
+                if message is not None:
+                    issue["text"] = message
+                if severity is not None:
+                    issue["severity"] = severity
+                if category is not None:
+                    issue["category"] = category
+                if status is not None:
+                    issue["status"] = status
 
-        # tags の更新
-        if tags is not None:
-            issue["tags"] = tags
-        else:
-            current_tags = issue.get("tags", [])
-            if add_tags:
-                for t in add_tags:
-                    if t not in current_tags:
-                        current_tags.append(t)
-                issue["tags"] = current_tags[:_MAX_TAGS]
-            if remove_tags:
-                issue["tags"] = [t for t in issue.get("tags", []) if t not in remove_tags]
+                # tags の更新
+                if tags is not None:
+                    issue["tags"] = tags
+                else:
+                    current_tags = issue.get("tags", [])
+                    if add_tags:
+                        for t in add_tags:
+                            if t not in current_tags:
+                                current_tags.append(t)
+                        issue["tags"] = current_tags[:_MAX_TAGS]
+                    if remove_tags:
+                        issue["tags"] = [t for t in issue.get("tags", []) if t not in remove_tags]
 
-        # related_files の更新
-        if related_files is not None:
-            issue["related_files"] = related_files
-        else:
-            current_files = issue.get("related_files", [])
-            if add_related_files:
-                for f in add_related_files:
-                    if f not in current_files:
-                        current_files.append(f)
-                issue["related_files"] = current_files[:_MAX_RELATED_FILES]
-            if remove_related_files:
-                issue["related_files"] = [f for f in issue.get("related_files", [])
-                                           if f not in remove_related_files]
-        ai = state["current_ai"]
+                # related_files の更新
+                if related_files is not None:
+                    issue["related_files"] = related_files
+                else:
+                    current_files = issue.get("related_files", [])
+                    if add_related_files:
+                        for f in add_related_files:
+                            if f not in current_files:
+                                current_files.append(f)
+                        issue["related_files"] = current_files[:_MAX_RELATED_FILES]
+                    if remove_related_files:
+                        issue["related_files"] = [f for f in issue.get("related_files", [])
+                                                   if f not in remove_related_files]
+                ai = state["current_ai"]
 
-    emoji = _SEVERITY_EMOJI.get(issue.get("severity", "P2"), "")
-    _append_session_log(ai, f"問題更新: [{issue_id}]")
-    return (
-        f"問題を更新しました: {emoji} [{issue_id}][{issue.get('severity','?')}] {issue['text']}\n"
-        f"  category: {issue.get('category','?')}  "
-        f"tags: {issue.get('tags',[])}  "
-        f"status: {issue.get('status','?')}"
-    )
+            emoji = _SEVERITY_EMOJI.get(issue.get("severity", "P2"), "")
+            _append_session_log(ai, f"問題更新: [{issue_id}]")
+            return (
+                f"問題を更新しました: {emoji} [{issue_id}][{issue.get('severity','?')}] {issue['text']}\n"
+                f"  category: {issue.get('category','?')}  "
+                f"tags: {issue.get('tags',[])}  "
+                f"status: {issue.get('status','?')}"
+            )
+    except RuntimeError as _pp_e:
+        return f"エラー: {_pp_e}"
 
 
 @mcp.tool()
-def collab_list_resolved() -> str:
+def collab_list_resolved(project_path: str = '') -> str:
     """
     解決済みの問題一覧を表示する。
 
     collab_resolve_issue() で解決済みにした問題を新しい順で一覧表示する。
     """
-    state = _load_state()
-    resolved = state.get("resolved_issues", [])
-    if not resolved:
-        return "解決済みの問題はありません。"
+    try:
+        with state_mod.project_context(project_path):
+            state = _load_state()
+            resolved = state.get("resolved_issues", [])
+            if not resolved:
+                return "解決済みの問題はありません。"
 
-    lines = [f"# 解決済みの問題一覧（{len(resolved)}件）", ""]
-    for iss in reversed(resolved):  # 新しい順
-        resolved_at = iss.get("resolved_at", "?")[:16]
-        resolved_by = iss.get("resolved_by", "?").upper()
-        emoji = _SEVERITY_EMOJI.get(iss.get("severity", "P2"), "")
-        sev   = iss.get("severity", "?")
-        tags  = f" ({', '.join(iss['tags'])})" if iss.get("tags") else ""
-        # 旧テキストに [P0]〜[P3] プレフィックスが残っている場合は表示上だけ除去する
-        text  = re.sub(r'^\[P[0-3]\]\s*', '', iss['text'])
-        lines.append(f"- {emoji} [{iss['id']}][{sev}] {text}{tags}")
-        lines.append(f"  解決: {resolved_at}  by {resolved_by}")
-        if iss.get("resolution_note"):
-            lines.append(f"  メモ: {iss['resolution_note']}")
-    return "\n".join(lines)
+            lines = [f"# 解決済みの問題一覧（{len(resolved)}件）", ""]
+            for iss in reversed(resolved):  # 新しい順
+                resolved_at = iss.get("resolved_at", "?")[:16]
+                resolved_by = iss.get("resolved_by", "?").upper()
+                emoji = _SEVERITY_EMOJI.get(iss.get("severity", "P2"), "")
+                sev   = iss.get("severity", "?")
+                tags  = f" ({', '.join(iss['tags'])})" if iss.get("tags") else ""
+                # 旧テキストに [P0]〜[P3] プレフィックスが残っている場合は表示上だけ除去する
+                text  = re.sub(r'^\[P[0-3]\]\s*', '', iss['text'])
+                lines.append(f"- {emoji} [{iss['id']}][{sev}] {text}{tags}")
+                lines.append(f"  解決: {resolved_at}  by {resolved_by}")
+                if iss.get("resolution_note"):
+                    lines.append(f"  メモ: {iss['resolution_note']}")
+            return "\n".join(lines)
+    except RuntimeError as _pp_e:
+        return f"エラー: {_pp_e}"
 
 
 @mcp.tool()
-def collab_record_file(file_path: str) -> str:
+def collab_record_file(file_path: str, project_path: str = '') -> str:
     """
     現在のタスクで変更・作成したファイルを記録する。
 
     Args:
         file_path: ファイルパス（プロジェクトルートからの相対パス推奨）
     """
-    # issue-016: ファイルパスの長さ・インジェクションタグ・制御文字を検証
-    err = _validate_input(file_path, "file_path")
-    if err:
-        return err
-    if any(c in file_path for c in ("\n", "\r", "\0")):
-        return "エラー: file_path に改行・制御文字は使用できません。"
+    try:
+        with state_mod.project_context(project_path):
+            # issue-016: ファイルパスの長さ・インジェクションタグ・制御文字を検証
+            err = _validate_input(file_path, "file_path")
+            if err:
+                return err
+            if any(c in file_path for c in ("\n", "\r", "\0")):
+                return "エラー: file_path に改行・制御文字は使用できません。"
 
-    # issue-014: current_task チェックを transaction 外で行い、
-    #            エラー時に last_updated が更新されないようにする
-    if not _load_state().get("current_task"):
-        return "エラー: 現在のタスクが設定されていません。先に collab_set_task を呼び出してください。"
+            # issue-014: current_task チェックを transaction 外で行い、
+            #            エラー時に last_updated が更新されないようにする
+            if not _load_state().get("current_task"):
+                return "エラー: 現在のタスクが設定されていません。先に collab_set_task を呼び出してください。"
 
-    with _state_transaction() as state:
-        if not state.get("current_task"):  # ロック内での二重確認
-            return "エラー: 現在のタスクが設定されていません。先に collab_set_task を呼び出してください。"
-        files = state["current_task"]["files_modified"]
-        already = file_path in files
-        if not already:
-            files.append(file_path)
-        ai = state["current_ai"]
-    if already:
-        return f"既に記録済みです: {file_path}"
-    _append_session_log(ai, f"ファイル記録: {file_path}")
-    return f"ファイルを記録しました: {file_path}"
+            with _state_transaction() as state:
+                if not state.get("current_task"):  # ロック内での二重確認
+                    return "エラー: 現在のタスクが設定されていません。先に collab_set_task を呼び出してください。"
+                files = state["current_task"]["files_modified"]
+                already = file_path in files
+                if not already:
+                    files.append(file_path)
+                ai = state["current_ai"]
+            if already:
+                return f"既に記録済みです: {file_path}"
+            _append_session_log(ai, f"ファイル記録: {file_path}")
+            return f"ファイルを記録しました: {file_path}"
+    except RuntimeError as _pp_e:
+        return f"エラー: {_pp_e}"
 
 
 @mcp.tool()
-def collab_change_mode(mode: str) -> str:
+def collab_change_mode(mode: str, project_path: str = '') -> str:
     """
     作業モードを変更する。
 
     Args:
         mode: plan（仕様検討）/ implement（実装）/ review（レビュー）/ debug（デバッグ）
     """
-    if mode not in VALID_MODES:
-        return f"エラー: モードは {' | '.join(VALID_MODES)} のいずれかを指定してください。"
-    with _state_transaction() as state:
-        old_mode = state["mode"]
-        state["mode"] = mode
-        ai = state["current_ai"]
-    _append_session_log(ai, f"モード変更: {old_mode} → {mode}")
-    return f"モードを変更しました: {MODE_LABELS.get(old_mode, old_mode)} → {MODE_LABELS.get(mode, mode)}"
+    try:
+        with state_mod.project_context(project_path):
+            if mode not in VALID_MODES:
+                return f"エラー: モードは {' | '.join(VALID_MODES)} のいずれかを指定してください。"
+            with _state_transaction() as state:
+                old_mode = state["mode"]
+                state["mode"] = mode
+                ai = state["current_ai"]
+            _append_session_log(ai, f"モード変更: {old_mode} → {mode}")
+            return f"モードを変更しました: {MODE_LABELS.get(old_mode, old_mode)} → {MODE_LABELS.get(mode, mode)}"
+    except RuntimeError as _pp_e:
+        return f"エラー: {_pp_e}"
 
 
 @mcp.tool()
-def collab_add_pending_task(title: str, description: str = "") -> str:
+def collab_add_pending_task(title: str, description: str = "", project_path: str = '') -> str:
     """
     保留タスクキューにタスクを追加する。
 
@@ -967,28 +1053,32 @@ def collab_add_pending_task(title: str, description: str = "") -> str:
         title: タスクのタイトル
         description: タスクの詳細説明（省略可）
     """
-    err = _validate_input(title, "title") or (description and _validate_input(description, "description"))
-    if err:
-        return err
-    with _state_transaction() as state:
-        task_numbers = [
-            int(t["id"].split("-")[-1])
-            for t in state.get("pending_tasks", []) + state.get("completed_pending_tasks", [])
-            if t.get("id", "").startswith("pending-") and t["id"].split("-")[-1].isdigit()
-        ]
-        task_id = f"pending-{max(task_numbers, default=0) + 1:03d}"
-        state["pending_tasks"].append({
-            "id": task_id,
-            "title": title, "description": description,
-            "added_at": _now_iso(), "added_by": state["current_ai"],
-        })
-        ai = state["current_ai"]
-    _append_session_log(ai, f"保留タスク追加: {title}")
-    return f"保留タスクに追加しました: [{task_id}] {title}"
+    try:
+        with state_mod.project_context(project_path):
+            err = _validate_input(title, "title") or (description and _validate_input(description, "description"))
+            if err:
+                return err
+            with _state_transaction() as state:
+                task_numbers = [
+                    int(t["id"].split("-")[-1])
+                    for t in state.get("pending_tasks", []) + state.get("completed_pending_tasks", [])
+                    if t.get("id", "").startswith("pending-") and t["id"].split("-")[-1].isdigit()
+                ]
+                task_id = f"pending-{max(task_numbers, default=0) + 1:03d}"
+                state["pending_tasks"].append({
+                    "id": task_id,
+                    "title": title, "description": description,
+                    "added_at": _now_iso(), "added_by": state["current_ai"],
+                })
+                ai = state["current_ai"]
+            _append_session_log(ai, f"保留タスク追加: {title}")
+            return f"保留タスクに追加しました: [{task_id}] {title}"
+    except RuntimeError as _pp_e:
+        return f"エラー: {_pp_e}"
 
 
 @mcp.tool()
-def collab_close_pending_task(task_id: str, note: str = "") -> str:
+def collab_close_pending_task(task_id: str, note: str = "", project_path: str = '') -> str:
     """
     保留タスクを完了扱いにし、保留一覧から取り除く。
 
@@ -996,33 +1086,37 @@ def collab_close_pending_task(task_id: str, note: str = "") -> str:
         task_id: 完了する保留タスクID（例: pending-001）
         note: 完了時に残す補足（省略可）
     """
-    # issue-016: note の入力検証
-    if note:
-        err = _validate_input(note, "note")
-        if err:
-            return err
-    # issue-014: task_id の存在チェックを transaction 外で先に行う
-    if not any(t.get("id") == task_id for t in _load_state().get("pending_tasks", [])):
-        return f"エラー: 保留タスクが見つかりません: {task_id}"
+    try:
+        with state_mod.project_context(project_path):
+            # issue-016: note の入力検証
+            if note:
+                err = _validate_input(note, "note")
+                if err:
+                    return err
+            # issue-014: task_id の存在チェックを transaction 外で先に行う
+            if not any(t.get("id") == task_id for t in _load_state().get("pending_tasks", [])):
+                return f"エラー: 保留タスクが見つかりません: {task_id}"
 
-    with _state_transaction() as state:
-        pending = state.get("pending_tasks", [])
-        matched_index = next((i for i, task in enumerate(pending) if task.get("id") == task_id), None)
-        if matched_index is None:
-            return f"エラー: 保留タスクが見つかりません: {task_id}"
-        task = pending.pop(matched_index)
-        task["completed_at"] = _now_iso()
-        task["completed_by"] = state["current_ai"]
-        if note:
-            task["completion_note"] = note
-        state.setdefault("completed_pending_tasks", []).append(task)
-        ai = state["current_ai"]
-    _append_session_log(ai, f"保留タスク完了: [{task_id}] {task['title']}")
-    return f"保留タスクを完了しました: [{task_id}] {task['title']}"
+            with _state_transaction() as state:
+                pending = state.get("pending_tasks", [])
+                matched_index = next((i for i, task in enumerate(pending) if task.get("id") == task_id), None)
+                if matched_index is None:
+                    return f"エラー: 保留タスクが見つかりません: {task_id}"
+                task = pending.pop(matched_index)
+                task["completed_at"] = _now_iso()
+                task["completed_by"] = state["current_ai"]
+                if note:
+                    task["completion_note"] = note
+                state.setdefault("completed_pending_tasks", []).append(task)
+                ai = state["current_ai"]
+            _append_session_log(ai, f"保留タスク完了: [{task_id}] {task['title']}")
+            return f"保留タスクを完了しました: [{task_id}] {task['title']}"
+    except RuntimeError as _pp_e:
+        return f"エラー: {_pp_e}"
 
 
 @mcp.tool()
-def collab_complete_task(note: str = "") -> str:
+def collab_complete_task(note: str = "", project_path: str = '') -> str:
     """
     現在のタスクを完了済みにして一覧から取り除く。
 
@@ -1032,31 +1126,35 @@ def collab_complete_task(note: str = "") -> str:
     Args:
         note: 完了時のメモ・備考（省略可）
     """
-    if note:
-        err = _validate_input(note, "note")
-        if err:
-            return err
-    # issue-014: current_task チェックを transaction 外で先に行う
-    if not _load_state().get("current_task"):
-        return "エラー: 現在のタスクが設定されていません。collab_set_task() で先にタスクを設定してください。"
+    try:
+        with state_mod.project_context(project_path):
+            if note:
+                err = _validate_input(note, "note")
+                if err:
+                    return err
+            # issue-014: current_task チェックを transaction 外で先に行う
+            if not _load_state().get("current_task"):
+                return "エラー: 現在のタスクが設定されていません。collab_set_task() で先にタスクを設定してください。"
 
-    with _state_transaction() as state:
-        if not state.get("current_task"):  # ロック内での二重確認
-            return "エラー: 現在のタスクが設定されていません。collab_set_task() で先にタスクを設定してください。"
-        task = state["current_task"]
-        task["completed_at"] = _now_iso()
-        task["completed_by"] = state["current_ai"]
-        if note:
-            task["completion_note"] = note
-        state["completed_tasks"].append(task)
-        state["current_task"] = None
-        ai = state["current_ai"]
-    _append_session_log(ai, f"タスク完了: [{task['id']}] {task['title']}")
-    return f"タスクを完了しました: [{task['id']}] {task['title']}"
+            with _state_transaction() as state:
+                if not state.get("current_task"):  # ロック内での二重確認
+                    return "エラー: 現在のタスクが設定されていません。collab_set_task() で先にタスクを設定してください。"
+                task = state["current_task"]
+                task["completed_at"] = _now_iso()
+                task["completed_by"] = state["current_ai"]
+                if note:
+                    task["completion_note"] = note
+                state["completed_tasks"].append(task)
+                state["current_task"] = None
+                ai = state["current_ai"]
+            _append_session_log(ai, f"タスク完了: [{task['id']}] {task['title']}")
+            return f"タスクを完了しました: [{task['id']}] {task['title']}"
+    except RuntimeError as _pp_e:
+        return f"エラー: {_pp_e}"
 
 
 @mcp.tool()
-def collab_generate_handoff(to_ai: str, dry_run: bool = False) -> str:
+def collab_generate_handoff(to_ai: str, dry_run: bool = False, project_path: str = '') -> str:
     """
     ハンドオフドキュメントを生成して担当AIを切り替える。
 
@@ -1064,46 +1162,50 @@ def collab_generate_handoff(to_ai: str, dry_run: bool = False) -> str:
         to_ai: 引き継ぎ先のAI。"claude" または "codex"
         dry_run: True にすると実際の書き込み・担当切り替えを行わずプレビューのみ返す
     """
-    if to_ai not in VALID_AI:
-        return f"エラー: AIは 'claude' または 'codex' を指定してください。"
+    try:
+        with state_mod.project_context(project_path):
+            if to_ai not in VALID_AI:
+                return f"エラー: AIは 'claude' または 'codex' を指定してください。"
 
-    # dry_run: 状態変更・ファイル書き込みなしでプレビューのみ返す
-    if dry_run:
-        state   = _load_state()
-        from_ai = state["current_ai"]
-        preview = _build_handoff(state, from_ai, to_ai)
-        return json.dumps({
-            "dry_run":          True,
-            "would_write_path": str(_handoff_file()),
-            "from_ai":          from_ai,
-            "target_ai":        to_ai,
-            "preview_chars":    len(preview),
-            "preview":          preview[:800] + ("…（以降省略）" if len(preview) > 800 else ""),
-            "warnings":         [],
-        }, ensure_ascii=False, indent=2)
+            # dry_run: 状態変更・ファイル書き込みなしでプレビューのみ返す
+            if dry_run:
+                state   = _load_state()
+                from_ai = state["current_ai"]
+                preview = _build_handoff(state, from_ai, to_ai)
+                return json.dumps({
+                    "dry_run":          True,
+                    "would_write_path": str(_handoff_file()),
+                    "from_ai":          from_ai,
+                    "target_ai":        to_ai,
+                    "preview_chars":    len(preview),
+                    "preview":          preview[:800] + ("…（以降省略）" if len(preview) > 800 else ""),
+                    "warnings":         [],
+                }, ensure_ascii=False, indent=2)
 
-    with _state_transaction() as state:
-        from_ai = state["current_ai"]
-        # ハンドオフ文書はロック内で原子的に生成（状態と内容の一貫性を保つ）
-        _write_atomic(_handoff_file(), _build_handoff(state, from_ai, to_ai))
-        state["current_ai"]    = to_ai
-        state["session_count"] += 1
-        new_session = state["session_count"]
-        mode        = state["mode"]
+            with _state_transaction() as state:
+                from_ai = state["current_ai"]
+                # ハンドオフ文書はロック内で原子的に生成（状態と内容の一貫性を保つ）
+                _write_atomic(_handoff_file(), _build_handoff(state, from_ai, to_ai))
+                state["current_ai"]    = to_ai
+                state["session_count"] += 1
+                new_session = state["session_count"]
+                mode        = state["mode"]
 
-    _append_session_log(from_ai, f"ハンドオフ: {from_ai.upper()} → {to_ai.upper()}")
-    _create_session_log(to_ai, new_session, mode)
+            _append_session_log(from_ai, f"ハンドオフ: {from_ai.upper()} → {to_ai.upper()}")
+            _create_session_log(to_ai, new_session, mode)
 
-    return (
-        f"ハンドオフを生成しました: {from_ai.upper()} → {to_ai.upper()}\n"
-        f"ファイル: {_handoff_file()}\n\n"
-        f"{'Claude' if to_ai == 'claude' else 'Codex'} Desktop の新しいセッションで\n"
-        f"「HANDOFF.md を読んで続きをお願いします」と伝えてください。"
-    )
+            return (
+                f"ハンドオフを生成しました: {from_ai.upper()} → {to_ai.upper()}\n"
+                f"ファイル: {_handoff_file()}\n\n"
+                f"{'Claude' if to_ai == 'claude' else 'Codex'} Desktop の新しいセッションで\n"
+                f"「HANDOFF.md を読んで続きをお願いします」と伝えてください。"
+            )
+    except RuntimeError as _pp_e:
+        return f"エラー: {_pp_e}"
 
 
 @mcp.tool()
-def collab_checkpoint(message: str, to_ai: str = "", dry_run: bool = False) -> str:
+def collab_checkpoint(message: str, to_ai: str = "", dry_run: bool = False, project_path: str = '') -> str:
     """
     作業メモの追加とハンドオフ生成を一度に行う。
 
@@ -1112,50 +1214,54 @@ def collab_checkpoint(message: str, to_ai: str = "", dry_run: bool = False) -> s
         to_ai: 引き継ぎ先。"claude" / "codex"。省略時は現在担当でないAI。
         dry_run: True にするとメモ追加・ファイル書き込み・担当切り替えを行わずプレビューのみ返す
     """
-    err = _validate_input(message, "message")
-    if err:
-        return err
-    # issue-014: to_ai が明示指定されていて不正な場合は transaction 外で弾く
-    if to_ai and to_ai not in VALID_AI:
-        return "エラー: AIは 'claude' または 'codex' を指定してください。"
+    try:
+        with state_mod.project_context(project_path):
+            err = _validate_input(message, "message")
+            if err:
+                return err
+            # issue-014: to_ai が明示指定されていて不正な場合は transaction 外で弾く
+            if to_ai and to_ai not in VALID_AI:
+                return "エラー: AIは 'claude' または 'codex' を指定してください。"
 
-    # dry_run: 状態変更・ファイル書き込みなしでプレビューのみ返す
-    if dry_run:
-        state     = _load_state()
-        from_ai   = state["current_ai"]
-        target_ai = to_ai or ("claude" if from_ai == "codex" else "codex")
-        # メモを仮追加したコピーでプレビュー（実際の state には書き込まない）
-        preview_state = copy.deepcopy(state)
-        preview_state["notes"].append({"timestamp": _now_iso(), "ai": from_ai, "text": message})
-        preview = _build_handoff(preview_state, from_ai, target_ai)
-        return json.dumps({
-            "dry_run":          True,
-            "would_write_path": str(_handoff_file()),
-            "from_ai":          from_ai,
-            "target_ai":        target_ai,
-            "preview_chars":    len(preview),
-            "preview":          preview[:800] + ("…（以降省略）" if len(preview) > 800 else ""),
-            "warnings":         [],
-        }, ensure_ascii=False, indent=2)
+            # dry_run: 状態変更・ファイル書き込みなしでプレビューのみ返す
+            if dry_run:
+                state     = _load_state()
+                from_ai   = state["current_ai"]
+                target_ai = to_ai or ("claude" if from_ai == "codex" else "codex")
+                # メモを仮追加したコピーでプレビュー（実際の state には書き込まない）
+                preview_state = copy.deepcopy(state)
+                preview_state["notes"].append({"timestamp": _now_iso(), "ai": from_ai, "text": message})
+                preview = _build_handoff(preview_state, from_ai, target_ai)
+                return json.dumps({
+                    "dry_run":          True,
+                    "would_write_path": str(_handoff_file()),
+                    "from_ai":          from_ai,
+                    "target_ai":        target_ai,
+                    "preview_chars":    len(preview),
+                    "preview":          preview[:800] + ("…（以降省略）" if len(preview) > 800 else ""),
+                    "warnings":         [],
+                }, ensure_ascii=False, indent=2)
 
-    with _state_transaction() as state:
-        from_ai = state["current_ai"]
-        target_ai = to_ai or ("claude" if from_ai == "codex" else "codex")
-        state["notes"].append({"timestamp": _now_iso(), "ai": from_ai, "text": message})
-        _write_atomic(_handoff_file(), _build_handoff(state, from_ai, target_ai))
-        state["current_ai"] = target_ai
-        state["session_count"] += 1
-        new_session = state["session_count"]
-        mode = state["mode"]
+            with _state_transaction() as state:
+                from_ai = state["current_ai"]
+                target_ai = to_ai or ("claude" if from_ai == "codex" else "codex")
+                state["notes"].append({"timestamp": _now_iso(), "ai": from_ai, "text": message})
+                _write_atomic(_handoff_file(), _build_handoff(state, from_ai, target_ai))
+                state["current_ai"] = target_ai
+                state["session_count"] += 1
+                new_session = state["session_count"]
+                mode = state["mode"]
 
-    _append_session_log(from_ai, f"メモ: {message}")
-    _append_session_log(from_ai, f"チェックポイント/ハンドオフ: {from_ai.upper()} → {target_ai.upper()}")
-    _create_session_log(target_ai, new_session, mode)
-    return (
-        f"チェックポイントを生成しました: {from_ai.upper()} → {target_ai.upper()}\n"
-        f"メモ: {message}\n"
-        f"ファイル: {_handoff_file()}"
-    )
+            _append_session_log(from_ai, f"メモ: {message}")
+            _append_session_log(from_ai, f"チェックポイント/ハンドオフ: {from_ai.upper()} → {target_ai.upper()}")
+            _create_session_log(target_ai, new_session, mode)
+            return (
+                f"チェックポイントを生成しました: {from_ai.upper()} → {target_ai.upper()}\n"
+                f"メモ: {message}\n"
+                f"ファイル: {_handoff_file()}"
+            )
+    except RuntimeError as _pp_e:
+        return f"エラー: {_pp_e}"
 
 #endregion
 
@@ -1314,7 +1420,7 @@ def collab_setup_cli(ai: str, command: str, args_before: list[str] = [], args_af
 #region MCPツール — メンテナンス
 
 @mcp.tool()
-def collab_search(query: str) -> str:
+def collab_search(query: str, project_path: str = '') -> str:
     """
     キーワードでメモ・決定事項・問題・タスクを横断検索する。
 
@@ -1324,78 +1430,82 @@ def collab_search(query: str) -> str:
     Args:
         query: 検索キーワード
     """
-    state = _load_state()
-    q = query.lower()
-    results: list[str] = []
+    try:
+        with state_mod.project_context(project_path):
+            state = _load_state()
+            q = query.lower()
+            results: list[str] = []
 
-    # メモ
-    for n in state.get("notes", []):
-        text = n.get("text", "")
-        if q in text.lower():
-            results.append(f"[メモ]   {n['timestamp'][:16]} ({n['ai'].upper()}) {text}")
+            # メモ
+            for n in state.get("notes", []):
+                text = n.get("text", "")
+                if q in text.lower():
+                    results.append(f"[メモ]   {n['timestamp'][:16]} ({n['ai'].upper()}) {text}")
 
-    # 決定事項
-    for d in state.get("key_decisions", []):
-        title, content = d.get("title", ""), d.get("content", "")
-        if q in title.lower() or q in content.lower():
-            results.append(f"[決定]   {d['timestamp'][:10]} {title}: {content[:100]}")
+            # 決定事項
+            for d in state.get("key_decisions", []):
+                title, content = d.get("title", ""), d.get("content", "")
+                if q in title.lower() or q in content.lower():
+                    results.append(f"[決定]   {d['timestamp'][:10]} {title}: {content[:100]}")
 
-    # 既知の問題（text + category + tags + related_files も検索対象）
-    for iss in state.get("known_issues", []):
-        if not isinstance(iss, dict):
-            continue
-        hit = (q in iss.get("text", "").lower()
-               or q in iss.get("category", "").lower()
-               or any(q in t.lower() for t in iss.get("tags", []))
-               or any(q in fp.lower() for fp in iss.get("related_files", [])))
-        if hit:
-            emoji = _SEVERITY_EMOJI.get(iss.get("severity", "P2"), "")
-            results.append(f"[問題]   {emoji}[{iss['id']}][{iss.get('severity','?')}] {iss['text']}")
+            # 既知の問題（text + category + tags + related_files も検索対象）
+            for iss in state.get("known_issues", []):
+                if not isinstance(iss, dict):
+                    continue
+                hit = (q in iss.get("text", "").lower()
+                       or q in iss.get("category", "").lower()
+                       or any(q in t.lower() for t in iss.get("tags", []))
+                       or any(q in fp.lower() for fp in iss.get("related_files", [])))
+                if hit:
+                    emoji = _SEVERITY_EMOJI.get(iss.get("severity", "P2"), "")
+                    results.append(f"[問題]   {emoji}[{iss['id']}][{iss.get('severity','?')}] {iss['text']}")
 
-    # 解決済みの問題（同様に拡張フィールドも検索）
-    for iss in state.get("resolved_issues", []):
-        if not isinstance(iss, dict):
-            continue
-        hit = (q in iss.get("text", "").lower()
-               or q in iss.get("category", "").lower()
-               or any(q in t.lower() for t in iss.get("tags", []))
-               or any(q in fp.lower() for fp in iss.get("related_files", []))
-               or q in iss.get("resolution_note", "").lower())
-        if hit:
-            emoji = _SEVERITY_EMOJI.get(iss.get("severity", "P2"), "")
-            results.append(f"[解決済] {emoji}[{iss['id']}][{iss.get('severity','?')}] {iss['text']}")
+            # 解決済みの問題（同様に拡張フィールドも検索）
+            for iss in state.get("resolved_issues", []):
+                if not isinstance(iss, dict):
+                    continue
+                hit = (q in iss.get("text", "").lower()
+                       or q in iss.get("category", "").lower()
+                       or any(q in t.lower() for t in iss.get("tags", []))
+                       or any(q in fp.lower() for fp in iss.get("related_files", []))
+                       or q in iss.get("resolution_note", "").lower())
+                if hit:
+                    emoji = _SEVERITY_EMOJI.get(iss.get("severity", "P2"), "")
+                    results.append(f"[解決済] {emoji}[{iss['id']}][{iss.get('severity','?')}] {iss['text']}")
 
-    # 保留タスク
-    for t in state.get("pending_tasks", []):
-        if q in t.get("title", "").lower() or q in t.get("description", "").lower():
-            results.append(f"[保留]   [{t['id']}] {t['title']}")
+            # 保留タスク
+            for t in state.get("pending_tasks", []):
+                if q in t.get("title", "").lower() or q in t.get("description", "").lower():
+                    results.append(f"[保留]   [{t['id']}] {t['title']}")
 
-    # 現在タスク
-    ct = state.get("current_task")
-    if ct and (q in ct.get("title", "").lower() or q in ct.get("description", "").lower()):
-        results.append(f"[タスク] [{ct['id']}] {ct['title']}")
+            # 現在タスク
+            ct = state.get("current_task")
+            if ct and (q in ct.get("title", "").lower() or q in ct.get("description", "").lower()):
+                results.append(f"[タスク] [{ct['id']}] {ct['title']}")
 
-    # 完了済みタスク（issue-010: 検索漏れ修正）
-    for t in state.get("completed_tasks", []):
-        hit = (q in t.get("title", "").lower() or q in t.get("description", "").lower()
-               or q in t.get("completion_note", "").lower())
-        if not hit:
-            hit = any(q in fp.lower() for fp in t.get("files_modified", []))
-        if hit:
-            results.append(f"[完了タスク] [{t['id']}] {t['title']} ({t.get('completed_at', '?')[:10]})")
+            # 完了済みタスク（issue-010: 検索漏れ修正）
+            for t in state.get("completed_tasks", []):
+                hit = (q in t.get("title", "").lower() or q in t.get("description", "").lower()
+                       or q in t.get("completion_note", "").lower())
+                if not hit:
+                    hit = any(q in fp.lower() for fp in t.get("files_modified", []))
+                if hit:
+                    results.append(f"[完了タスク] [{t['id']}] {t['title']} ({t.get('completed_at', '?')[:10]})")
 
-    # 完了した保留タスク（issue-010: 検索漏れ修正）
-    for t in state.get("completed_pending_tasks", []):
-        if (q in t.get("title", "").lower() or q in t.get("description", "").lower()
-                or q in t.get("completion_note", "").lower()):
-            results.append(f"[完了保留] [{t['id']}] {t['title']} ({t.get('completed_at', '?')[:10]})")
+            # 完了した保留タスク（issue-010: 検索漏れ修正）
+            for t in state.get("completed_pending_tasks", []):
+                if (q in t.get("title", "").lower() or q in t.get("description", "").lower()
+                        or q in t.get("completion_note", "").lower()):
+                    results.append(f"[完了保留] [{t['id']}] {t['title']} ({t.get('completed_at', '?')[:10]})")
 
-    if not results:
-        return f"「{query}」に一致する項目は見つかりませんでした。"
+            if not results:
+                return f"「{query}」に一致する項目は見つかりませんでした。"
 
-    lines = [f"# 検索結果: 「{query}」（{len(results)}件）", ""]
-    lines.extend(results)
-    return "\n".join(lines)
+            lines = [f"# 検索結果: 「{query}」（{len(results)}件）", ""]
+            lines.extend(results)
+            return "\n".join(lines)
+    except RuntimeError as _pp_e:
+        return f"エラー: {_pp_e}"
 
 
 @mcp.tool()
@@ -1404,6 +1514,7 @@ def collab_timeline(
     since:      str = "",
     actor:      str = "",
     event_type: str = "",
+    project_path: str = '',
 ) -> str:
     """
     プロジェクトの更新イベントを時系列で返す。
@@ -1416,95 +1527,99 @@ def collab_timeline(
                     "note" / "decision" / "issue" / "issue_resolved" /
                     "task" / "task_done" / "pending" / "pending_done" / "" で全種別
     """
-    state = _load_state()
+    try:
+        with state_mod.project_context(project_path):
+            state = _load_state()
 
-    # 全イベントを収集
-    events: list[dict] = []
+            # 全イベントを収集
+            events: list[dict] = []
 
-    def _add(ts: str, kind: str, ai: str, label: str) -> None:
-        if ts:
-            events.append({"ts": ts, "kind": kind, "ai": ai.lower(), "label": label})
+            def _add(ts: str, kind: str, ai: str, label: str) -> None:
+                if ts:
+                    events.append({"ts": ts, "kind": kind, "ai": ai.lower(), "label": label})
 
-    for n in state.get("notes", []):
-        _add(n.get("timestamp", ""), "note", n.get("ai", "?"), n.get("text", "")[:100])
+            for n in state.get("notes", []):
+                _add(n.get("timestamp", ""), "note", n.get("ai", "?"), n.get("text", "")[:100])
 
-    for d in state.get("key_decisions", []):
-        _add(d.get("timestamp", ""), "decision", d.get("ai", "?"), d.get("title", "")[:80])
+            for d in state.get("key_decisions", []):
+                _add(d.get("timestamp", ""), "decision", d.get("ai", "?"), d.get("title", "")[:80])
 
-    for iss in state.get("known_issues", []):
-        if isinstance(iss, dict):
-            # issue-020: 構造化issueは added_at/added_by を優先、旧データは timestamp/ai にフォールバック
-            _add(
-                iss.get("added_at", "") or iss.get("timestamp", ""),
-                "issue",
-                iss.get("added_by", "") or iss.get("ai", "?"),
-                f"[{iss.get('id','?')}] {iss.get('text','')[:80]}",
-            )
+            for iss in state.get("known_issues", []):
+                if isinstance(iss, dict):
+                    # issue-020: 構造化issueは added_at/added_by を優先、旧データは timestamp/ai にフォールバック
+                    _add(
+                        iss.get("added_at", "") or iss.get("timestamp", ""),
+                        "issue",
+                        iss.get("added_by", "") or iss.get("ai", "?"),
+                        f"[{iss.get('id','?')}] {iss.get('text','')[:80]}",
+                    )
 
-    for iss in state.get("resolved_issues", []):
-        if isinstance(iss, dict):
-            _add(
-                iss.get("resolved_at", iss.get("timestamp", "")),
-                "issue_resolved",
-                iss.get("resolved_by", "?"),
-                f"[{iss.get('id','?')}] 解決: {iss.get('text','')[:60]}",
-            )
+            for iss in state.get("resolved_issues", []):
+                if isinstance(iss, dict):
+                    _add(
+                        iss.get("resolved_at", iss.get("timestamp", "")),
+                        "issue_resolved",
+                        iss.get("resolved_by", "?"),
+                        f"[{iss.get('id','?')}] 解決: {iss.get('text','')[:60]}",
+                    )
 
-    ct = state.get("current_task")
-    if ct:
-        _add(ct.get("started_at", ""), "task", ct.get("started_by", "?"),
-             f"[{ct.get('id','?')}] {ct.get('title','')[:60]}")
+            ct = state.get("current_task")
+            if ct:
+                _add(ct.get("started_at", ""), "task", ct.get("started_by", "?"),
+                     f"[{ct.get('id','?')}] {ct.get('title','')[:60]}")
 
-    for t in state.get("completed_tasks", []):
-        _add(t.get("completed_at", t.get("started_at", "")), "task_done",
-             t.get("started_by", "?"),
-             f"[{t.get('id','?')}] 完了: {t.get('title','')[:60]}")
+            for t in state.get("completed_tasks", []):
+                _add(t.get("completed_at", t.get("started_at", "")), "task_done",
+                     t.get("started_by", "?"),
+                     f"[{t.get('id','?')}] 完了: {t.get('title','')[:60]}")
 
-    for t in state.get("pending_tasks", []):
-        _add(t.get("added_at", ""), "pending", t.get("added_by", "?"),
-             f"[{t.get('id','?')}] {t.get('title','')[:60]}")
+            for t in state.get("pending_tasks", []):
+                _add(t.get("added_at", ""), "pending", t.get("added_by", "?"),
+                     f"[{t.get('id','?')}] {t.get('title','')[:60]}")
 
-    for t in state.get("completed_pending_tasks", []):
-        _add(t.get("completed_at", ""), "pending_done", t.get("added_by", "?"),
-             f"[{t.get('id','?')}] 完了: {t.get('title','')[:60]}")
+            for t in state.get("completed_pending_tasks", []):
+                _add(t.get("completed_at", ""), "pending_done", t.get("added_by", "?"),
+                     f"[{t.get('id','?')}] 完了: {t.get('title','')[:60]}")
 
-    # 降順ソート
-    events.sort(key=lambda e: e["ts"], reverse=True)
+            # 降順ソート
+            events.sort(key=lambda e: e["ts"], reverse=True)
 
-    # フィルタリング
-    if since:
-        events = [e for e in events if e["ts"] >= since]
-    if actor:
-        events = [e for e in events if e["ai"] == actor.lower()]
-    if event_type:
-        events = [e for e in events if e["kind"] == event_type]
+            # フィルタリング
+            if since:
+                events = [e for e in events if e["ts"] >= since]
+            if actor:
+                events = [e for e in events if e["ai"] == actor.lower()]
+            if event_type:
+                events = [e for e in events if e["kind"] == event_type]
 
-    # 件数制限
-    limit = max(1, min(limit, 100))
-    events = events[:limit]
+            # 件数制限
+            limit = max(1, min(limit, 100))
+            events = events[:limit]
 
-    if not events:
-        return "（表示できるイベントがありません）"
+            if not events:
+                return "（表示できるイベントがありません）"
 
-    # 種別ラベル
-    KIND_LABELS: dict[str, str] = {
-        "note":          "📝 メモ    ",
-        "decision":      "📌 決定    ",
-        "issue":         "⚠️  問題    ",
-        "issue_resolved":"✅ 問題解決",
-        "task":          "🔧 タスク  ",
-        "task_done":     "✅ タスク完",
-        "pending":       "⏳ 保留    ",
-        "pending_done":  "✅ 保留完了",
-    }
+            # 種別ラベル
+            KIND_LABELS: dict[str, str] = {
+                "note":          "📝 メモ    ",
+                "decision":      "📌 決定    ",
+                "issue":         "⚠️  問題    ",
+                "issue_resolved":"✅ 問題解決",
+                "task":          "🔧 タスク  ",
+                "task_done":     "✅ タスク完",
+                "pending":       "⏳ 保留    ",
+                "pending_done":  "✅ 保留完了",
+            }
 
-    lines = [f"# タイムライン（{len(events)}件）", ""]
-    for e in events:
-        kind_label = KIND_LABELS.get(e["kind"], e["kind"])
-        ts = e["ts"][:16] if len(e["ts"]) >= 16 else e["ts"]
-        lines.append(f"{ts}  {kind_label}  [{e['ai'].upper()}]  {e['label']}")
+            lines = [f"# タイムライン（{len(events)}件）", ""]
+            for e in events:
+                kind_label = KIND_LABELS.get(e["kind"], e["kind"])
+                ts = e["ts"][:16] if len(e["ts"]) >= 16 else e["ts"]
+                lines.append(f"{ts}  {kind_label}  [{e['ai'].upper()}]  {e['label']}")
 
-    return "\n".join(lines)
+            return "\n".join(lines)
+    except RuntimeError as _pp_e:
+        return f"エラー: {_pp_e}"
 
 
 @mcp.tool()
@@ -1564,29 +1679,33 @@ def collab_request_review(
 
 
 @mcp.tool()
-def collab_summary() -> str:
+def collab_summary(project_path: str = '') -> str:
     """
     現在の状態をコンパクトな4行で表示する。
 
     collab_status() の簡易版。ログ確認やヘッダ把握に使う。
     """
-    state = _load_state()
-    ct = state.get("current_task")
-    task_str = f"[{ct['id']}] {ct['title']}" if ct else "未設定"
-    issues  = len(state.get("known_issues", []))
-    pending = len(state.get("pending_tasks", []))
-    mode_label = MODE_LABELS.get(state["mode"], state["mode"])
+    try:
+        with state_mod.project_context(project_path):
+            state = _load_state()
+            ct = state.get("current_task")
+            task_str = f"[{ct['id']}] {ct['title']}" if ct else "未設定"
+            issues  = len(state.get("known_issues", []))
+            pending = len(state.get("pending_tasks", []))
+            mode_label = MODE_LABELS.get(state["mode"], state["mode"])
 
-    return (
-        f"📋 {state['project_name']} | {state['current_ai'].upper()} | {mode_label} | セッション#{state['session_count']}\n"
-        f"🔧 タスク : {task_str}\n"
-        f"⏳ 保留  : {pending}件  ⚠️ 問題: {issues}件\n"
-        f"🕐 最終更新: {state['last_updated'][:16]}"
-    )
+            return (
+                f"📋 {state['project_name']} | {state['current_ai'].upper()} | {mode_label} | セッション#{state['session_count']}\n"
+                f"🔧 タスク : {task_str}\n"
+                f"⏳ 保留  : {pending}件  ⚠️ 問題: {issues}件\n"
+                f"🕐 最終更新: {state['last_updated'][:16]}"
+            )
+    except RuntimeError as _pp_e:
+        return f"エラー: {_pp_e}"
 
 
 @mcp.tool()
-def collab_cleanup_sessions(keep_per_ai: int = 5) -> str:
+def collab_cleanup_sessions(keep_per_ai: int = 5, project_path: str = '') -> str:
     """
     ai_sessions/ フォルダの古いセッションログを削除する。
 
@@ -1596,32 +1715,36 @@ def collab_cleanup_sessions(keep_per_ai: int = 5) -> str:
     Args:
         keep_per_ai: AIごとに残すログファイル数（デフォルト: 5）
     """
-    if keep_per_ai < 1:
-        return "エラー: keep_per_ai は 1 以上を指定してください。"
+    try:
+        with state_mod.project_context(project_path):
+            if keep_per_ai < 1:
+                return "エラー: keep_per_ai は 1 以上を指定してください。"
 
-    sd = _sessions_dir()
-    if not sd.exists():
-        return "ai_sessions/ フォルダが存在しません。"
+            sd = _sessions_dir()
+            if not sd.exists():
+                return "ai_sessions/ フォルダが存在しません。"
 
-    deleted: list[str] = []
-    kept: dict[str, int] = {}
-    for ai in VALID_AI:
-        logs = sorted(sd.glob(f"*_{ai}.md"), reverse=True)  # 新しい順
-        kept[ai] = min(len(logs), keep_per_ai)
-        for log_file in logs[keep_per_ai:]:
-            log_file.unlink(missing_ok=True)
-            deleted.append(log_file.name)
+            deleted: list[str] = []
+            kept: dict[str, int] = {}
+            for ai in VALID_AI:
+                logs = sorted(sd.glob(f"*_{ai}.md"), reverse=True)  # 新しい順
+                kept[ai] = min(len(logs), keep_per_ai)
+                for log_file in logs[keep_per_ai:]:
+                    log_file.unlink(missing_ok=True)
+                    deleted.append(log_file.name)
 
-    if not deleted:
-        summary = "  " + "、".join(f"{ai.upper()}: {kept[ai]}件" for ai in VALID_AI)
-        return f"削除対象なし（各AI最新{keep_per_ai}件以内）。\n現在のログ数:\n{summary}"
+            if not deleted:
+                summary = "  " + "、".join(f"{ai.upper()}: {kept[ai]}件" for ai in VALID_AI)
+                return f"削除対象なし（各AI最新{keep_per_ai}件以内）。\n現在のログ数:\n{summary}"
 
-    kept_summary = "  " + "、".join(f"{ai.upper()}: {kept[ai]}件残存" for ai in VALID_AI)
-    return (
-        f"{len(deleted)}件のセッションログを削除しました。\n"
-        f"残存ログ:\n{kept_summary}\n"
-        f"削除ファイル:\n" + "\n".join(f"  - {n}" for n in deleted)
-    )
+            kept_summary = "  " + "、".join(f"{ai.upper()}: {kept[ai]}件残存" for ai in VALID_AI)
+            return (
+                f"{len(deleted)}件のセッションログを削除しました。\n"
+                f"残存ログ:\n{kept_summary}\n"
+                f"削除ファイル:\n" + "\n".join(f"  - {n}" for n in deleted)
+            )
+    except RuntimeError as _pp_e:
+        return f"エラー: {_pp_e}"
 
 
 @mcp.tool()
@@ -1630,6 +1753,7 @@ def collab_cleanup_history(
     keep_completed_tasks: int = 50,
     archive: bool = True,
     dry_run: bool = False,
+    project_path: str = '',
 ) -> str:
     """
     古いメモ・完了タスクを整理してAI_STATE.jsonをスリムにする。
@@ -1644,76 +1768,80 @@ def collab_cleanup_history(
                               False = 単純削除
         dry_run:              True = 実際には変更せず予測結果だけ返す
     """
-    if keep_notes < 1 or keep_completed_tasks < 1:
-        return "エラー: keep_notes / keep_completed_tasks は 1 以上を指定してください。"
+    try:
+        with state_mod.project_context(project_path):
+            if keep_notes < 1 or keep_completed_tasks < 1:
+                return "エラー: keep_notes / keep_completed_tasks は 1 以上を指定してください。"
 
-    # dry_run: 変更せずに予測結果を返す
-    state = _load_state()
-    notes_total     = len(state.get("notes", []))
-    tasks_total     = len(state.get("completed_tasks", []))
-    notes_trim      = max(0, notes_total - keep_notes)
-    tasks_trim      = max(0, tasks_total - keep_completed_tasks)
+            # dry_run: 変更せずに予測結果を返す
+            state = _load_state()
+            notes_total     = len(state.get("notes", []))
+            tasks_total     = len(state.get("completed_tasks", []))
+            notes_trim      = max(0, notes_total - keep_notes)
+            tasks_trim      = max(0, tasks_total - keep_completed_tasks)
 
-    if notes_trim == 0 and tasks_trim == 0:
-        return (
-            f"整理不要です。\n"
-            f"  メモ: {notes_total}件（上限 {keep_notes}件）\n"
-            f"  完了タスク: {tasks_total}件（上限 {keep_completed_tasks}件）"
-        )
+            if notes_trim == 0 and tasks_trim == 0:
+                return (
+                    f"整理不要です。\n"
+                    f"  メモ: {notes_total}件（上限 {keep_notes}件）\n"
+                    f"  完了タスク: {tasks_total}件（上限 {keep_completed_tasks}件）"
+                )
 
-    if dry_run:
-        return (
-            f"[dry_run] 実行すると以下が整理されます:\n"
-            f"  メモ: {notes_total}件 → {notes_total - notes_trim}件残存（{notes_trim}件アーカイブ）\n"
-            f"  完了タスク: {tasks_total}件 → {tasks_total - tasks_trim}件残存（{tasks_trim}件アーカイブ）\n"
-            f"  アーカイブ先: {'AI_STATE.archive.json' if archive else '（単純削除）'}\n"
-            f"dry_run=False で実行してください。"
-        )
+            if dry_run:
+                return (
+                    f"[dry_run] 実行すると以下が整理されます:\n"
+                    f"  メモ: {notes_total}件 → {notes_total - notes_trim}件残存（{notes_trim}件アーカイブ）\n"
+                    f"  完了タスク: {tasks_total}件 → {tasks_total - tasks_trim}件残存（{tasks_trim}件アーカイブ）\n"
+                    f"  アーカイブ先: {'AI_STATE.archive.json' if archive else '（単純削除）'}\n"
+                    f"dry_run=False で実行してください。"
+                )
 
-    # アーカイブ対象を確定
-    archived_notes = state["notes"][:notes_trim]
-    archived_tasks = state["completed_tasks"][:tasks_trim]
+            # アーカイブ対象を確定
+            archived_notes = state["notes"][:notes_trim]
+            archived_tasks = state["completed_tasks"][:tasks_trim]
 
-    if archive and (archived_notes or archived_tasks):
-        # AI_STATE.archive.json を読み込み（なければ新規）
-        af = _archive_file()
-        if af.exists():
-            try:
-                with open(af, "r", encoding="utf-8-sig") as f:
-                    arc = json.load(f)
-            except Exception:
-                arc = {"notes": [], "completed_tasks": []}
-        else:
-            arc = {"notes": [], "completed_tasks": []}
+            if archive and (archived_notes or archived_tasks):
+                # AI_STATE.archive.json を読み込み（なければ新規）
+                af = _archive_file()
+                if af.exists():
+                    try:
+                        with open(af, "r", encoding="utf-8-sig") as f:
+                            arc = json.load(f)
+                    except Exception:
+                        arc = {"notes": [], "completed_tasks": []}
+                else:
+                    arc = {"notes": [], "completed_tasks": []}
 
-        arc.setdefault("notes", []).extend(archived_notes)
-        arc.setdefault("completed_tasks", []).extend(archived_tasks)
-        arc["last_archived"] = _now_iso()
+                arc.setdefault("notes", []).extend(archived_notes)
+                arc.setdefault("completed_tasks", []).extend(archived_tasks)
+                arc["last_archived"] = _now_iso()
 
-        # アーカイブファイルを原子的に書き込む
-        tmp_fd, tmp_path = tempfile.mkstemp(dir=_get_project_dir(), suffix=".tmp", prefix="arc_")
-        try:
-            with os.fdopen(tmp_fd, "w", encoding="utf-8") as f:
-                json.dump(arc, f, ensure_ascii=False, indent=2)
-            os.replace(tmp_path, af)
-        except Exception:
-            try:
-                os.unlink(tmp_path)
-            except OSError:
-                pass
-            raise
+                # アーカイブファイルを原子的に書き込む
+                tmp_fd, tmp_path = tempfile.mkstemp(dir=_get_project_dir(), suffix=".tmp", prefix="arc_")
+                try:
+                    with os.fdopen(tmp_fd, "w", encoding="utf-8") as f:
+                        json.dump(arc, f, ensure_ascii=False, indent=2)
+                    os.replace(tmp_path, af)
+                except Exception:
+                    try:
+                        os.unlink(tmp_path)
+                    except OSError:
+                        pass
+                    raise
 
-    # 状態を更新（古いレコードを削除）
-    with _state_transaction() as st:
-        st["notes"]           = st["notes"][notes_trim:]
-        st["completed_tasks"] = st["completed_tasks"][tasks_trim:]
+            # 状態を更新（古いレコードを削除）
+            with _state_transaction() as st:
+                st["notes"]           = st["notes"][notes_trim:]
+                st["completed_tasks"] = st["completed_tasks"][tasks_trim:]
 
-    archive_note = "AI_STATE.archive.json に退避" if archive else "単純削除"
-    return (
-        f"履歴を整理しました。\n"
-        f"  メモ: {notes_total}件 → {notes_total - notes_trim}件（{notes_trim}件を{archive_note}）\n"
-        f"  完了タスク: {tasks_total}件 → {tasks_total - tasks_trim}件（{tasks_trim}件を{archive_note}）"
-    )
+            archive_note = "AI_STATE.archive.json に退避" if archive else "単純削除"
+            return (
+                f"履歴を整理しました。\n"
+                f"  メモ: {notes_total}件 → {notes_total - notes_trim}件（{notes_trim}件を{archive_note}）\n"
+                f"  完了タスク: {tasks_total}件 → {tasks_total - tasks_trim}件（{tasks_trim}件を{archive_note}）"
+            )
+    except RuntimeError as _pp_e:
+        return f"エラー: {_pp_e}"
 
 
 @mcp.tool()
@@ -1721,6 +1849,7 @@ def collab_export_state(
     output_path: str = "",
     include_sessions: bool = False,
     redact_cli_config: bool = True,
+    project_path: str = '',
 ) -> str:
     """
     現在の状態をJSONファイルとしてエクスポートする。
@@ -1734,67 +1863,71 @@ def collab_export_state(
         include_sessions:  True = ai_sessions/ の内容も含める
         redact_cli_config: True = cli_config.json（APIキー等含む可能性）は含めない（デフォルト）
     """
-    state = _load_state()
-    proj_dir = _get_project_dir()
-
-    # 出力パスを決定する
-    if output_path:
-        out = Path(output_path)
-        if not out.is_absolute():
-            return "エラー: output_path は絶対パスを指定してください。"
-    else:
-        ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        out = proj_dir / f"AI_STATE_backup_{ts}.json"
-
-    # エクスポート用ペイロードを組み立てる
-    payload: dict = {
-        "export_version":  "1.0",
-        "exported_at":     _now_iso(),
-        "source_project":  str(proj_dir),
-        "state":           state,
-    }
-
-    if include_sessions:
-        sd = _sessions_dir()
-        session_data: dict[str, str] = {}
-        if sd.exists():
-            for log_file in sorted(sd.glob("*.md")):
-                try:
-                    session_data[log_file.name] = log_file.read_text(encoding="utf-8")
-                except OSError:
-                    session_data[log_file.name] = "（読み込み失敗）"
-        payload["sessions"] = session_data
-
-    if not redact_cli_config:
-        cfg_file = proj_dir / "cli_config.json"
-        if cfg_file.exists():
-            try:
-                with open(cfg_file, "r", encoding="utf-8-sig") as f:
-                    payload["cli_config"] = json.load(f)
-            except Exception:
-                payload["cli_config"] = None
-
-    # SHA-256チェックサムを計算する（checksum フィールド自体は除外して計算）
-    payload_json = json.dumps(payload, ensure_ascii=False, sort_keys=True)
-    checksum = hashlib.sha256(payload_json.encode("utf-8")).hexdigest()
-    payload["checksum"] = checksum
-
-    # ファイルに書き込む
     try:
-        out.parent.mkdir(parents=True, exist_ok=True)
-        _write_atomic(out, json.dumps(payload, ensure_ascii=False, indent=2))
-    except OSError as e:
-        return f"エラー: ファイルの書き込みに失敗しました: {e}"
+        with state_mod.project_context(project_path):
+            state = _load_state()
+            proj_dir = _get_project_dir()
 
-    return (
-        f"状態をエクスポートしました。\n"
-        f"  出力ファイル: {out}\n"
-        f"  SHA-256: {checksum[:16]}...\n"
-        f"  メモ: {len(state.get('notes', []))}件  "
-        f"決定事項: {len(state.get('key_decisions', []))}件  "
-        f"問題: {len(state.get('known_issues', []))}件\n"
-        f"復元: collab_import_state('{out}')"
-    )
+            # 出力パスを決定する
+            if output_path:
+                out = Path(output_path)
+                if not out.is_absolute():
+                    return "エラー: output_path は絶対パスを指定してください。"
+            else:
+                ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+                out = proj_dir / f"AI_STATE_backup_{ts}.json"
+
+            # エクスポート用ペイロードを組み立てる
+            payload: dict = {
+                "export_version":  "1.0",
+                "exported_at":     _now_iso(),
+                "source_project":  str(proj_dir),
+                "state":           state,
+            }
+
+            if include_sessions:
+                sd = _sessions_dir()
+                session_data: dict[str, str] = {}
+                if sd.exists():
+                    for log_file in sorted(sd.glob("*.md")):
+                        try:
+                            session_data[log_file.name] = log_file.read_text(encoding="utf-8")
+                        except OSError:
+                            session_data[log_file.name] = "（読み込み失敗）"
+                payload["sessions"] = session_data
+
+            if not redact_cli_config:
+                cfg_file = proj_dir / "cli_config.json"
+                if cfg_file.exists():
+                    try:
+                        with open(cfg_file, "r", encoding="utf-8-sig") as f:
+                            payload["cli_config"] = json.load(f)
+                    except Exception:
+                        payload["cli_config"] = None
+
+            # SHA-256チェックサムを計算する（checksum フィールド自体は除外して計算）
+            payload_json = json.dumps(payload, ensure_ascii=False, sort_keys=True)
+            checksum = hashlib.sha256(payload_json.encode("utf-8")).hexdigest()
+            payload["checksum"] = checksum
+
+            # ファイルに書き込む
+            try:
+                out.parent.mkdir(parents=True, exist_ok=True)
+                _write_atomic(out, json.dumps(payload, ensure_ascii=False, indent=2))
+            except OSError as e:
+                return f"エラー: ファイルの書き込みに失敗しました: {e}"
+
+            return (
+                f"状態をエクスポートしました。\n"
+                f"  出力ファイル: {out}\n"
+                f"  SHA-256: {checksum[:16]}...\n"
+                f"  メモ: {len(state.get('notes', []))}件  "
+                f"決定事項: {len(state.get('key_decisions', []))}件  "
+                f"問題: {len(state.get('known_issues', []))}件\n"
+                f"復元: collab_import_state('{out}')"
+            )
+    except RuntimeError as _pp_e:
+        return f"エラー: {_pp_e}"
 
 
 @mcp.tool()
@@ -1802,6 +1935,7 @@ def collab_import_state(
     input_path: str,
     mode: str = "validate",
     backup: bool = True,
+    project_path: str = '',
 ) -> str:
     """
     collab_export_state() で生成したバックアップから状態をインポートする。
@@ -1816,119 +1950,123 @@ def collab_import_state(
         mode:       "validate" / "merge" / "replace"（デフォルト: validate）
         backup:     True = replace 実行前に現在の状態を自動バックアップ（デフォルト: True）
     """
-    if mode not in ("validate", "merge", "replace"):
-        return "エラー: mode は 'validate' / 'merge' / 'replace' のいずれかを指定してください。"
-
-    in_path = Path(input_path)
-    if not in_path.is_absolute():
-        return "エラー: input_path は絶対パスを指定してください。"
-    if not in_path.exists():
-        return f"エラー: ファイルが見つかりません: {in_path}"
-
-    # ファイルを読み込む（issue-022: BOM付きUTF-8も許容）
     try:
-        with open(in_path, "r", encoding="utf-8-sig") as f:
-            payload = json.load(f)
-    except Exception as e:
-        return f"エラー: ファイルの読み込みに失敗しました: {e}"
+        with state_mod.project_context(project_path):
+            if mode not in ("validate", "merge", "replace"):
+                return "エラー: mode は 'validate' / 'merge' / 'replace' のいずれかを指定してください。"
 
-    # チェックサム検証
-    stored_checksum = payload.pop("checksum", None)
-    if stored_checksum is None:
-        return "エラー: チェックサムが見つかりません。このファイルはエクスポートされたものではない可能性があります。"
+            in_path = Path(input_path)
+            if not in_path.is_absolute():
+                return "エラー: input_path は絶対パスを指定してください。"
+            if not in_path.exists():
+                return f"エラー: ファイルが見つかりません: {in_path}"
 
-    payload_json     = json.dumps(payload, ensure_ascii=False, sort_keys=True)
-    calc_checksum    = hashlib.sha256(payload_json.encode("utf-8")).hexdigest()
-    payload["checksum"] = stored_checksum  # 元に戻す（表示用）
+            # ファイルを読み込む（issue-022: BOM付きUTF-8も許容）
+            try:
+                with open(in_path, "r", encoding="utf-8-sig") as f:
+                    payload = json.load(f)
+            except Exception as e:
+                return f"エラー: ファイルの読み込みに失敗しました: {e}"
 
-    if calc_checksum != stored_checksum:
-        return (
-            f"エラー: チェックサムが一致しません。ファイルが破損または改ざんされています。\n"
-            f"  格納値: {stored_checksum[:16]}...\n"
-            f"  計算値: {calc_checksum[:16]}..."
-        )
+            # チェックサム検証
+            stored_checksum = payload.pop("checksum", None)
+            if stored_checksum is None:
+                return "エラー: チェックサムが見つかりません。このファイルはエクスポートされたものではない可能性があります。"
 
-    imported_state = payload.get("state", {})
-    exported_at    = payload.get("exported_at", "不明")
-    source_project = payload.get("source_project", "不明")
+            payload_json     = json.dumps(payload, ensure_ascii=False, sort_keys=True)
+            calc_checksum    = hashlib.sha256(payload_json.encode("utf-8")).hexdigest()
+            payload["checksum"] = stored_checksum  # 元に戻す（表示用）
 
-    # ── validate モード ─────────────────────────────────────────────────
-    if mode == "validate":
-        notes_count    = len(imported_state.get("notes", []))
-        dec_count      = len(imported_state.get("key_decisions", []))
-        issue_count    = len(imported_state.get("known_issues", []))
-        task_count     = len(imported_state.get("completed_tasks", []))
-        return (
-            f"チェックサム検証: OK ✅\n"
-            f"  エクスポート日時: {exported_at}\n"
-            f"  ソースプロジェクト: {source_project}\n"
-            f"  メモ: {notes_count}件  決定事項: {dec_count}件  "
-            f"問題: {issue_count}件  完了タスク: {task_count}件\n"
-            f"インポートするには mode='merge' または mode='replace' を指定してください。"
-        )
+            if calc_checksum != stored_checksum:
+                return (
+                    f"エラー: チェックサムが一致しません。ファイルが破損または改ざんされています。\n"
+                    f"  格納値: {stored_checksum[:16]}...\n"
+                    f"  計算値: {calc_checksum[:16]}..."
+                )
 
-    # ── merge / replace モード ──────────────────────────────────────────
-    if mode == "replace" and backup:
-        # 現在の状態を replace 前にバックアップ
-        ts  = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        bak = _get_project_dir() / f"AI_STATE_before_import_{ts}.json"
-        try:
-            current_state = _load_state()
-            _write_atomic(bak, json.dumps(current_state, ensure_ascii=False, indent=2))
-        except Exception as e:
-            return f"エラー: バックアップの作成に失敗しました: {e}"
+            imported_state = payload.get("state", {})
+            exported_at    = payload.get("exported_at", "不明")
+            source_project = payload.get("source_project", "不明")
 
-    merged_notes    = 0
-    merged_decs     = 0
-    merged_issues   = 0
+            # ── validate モード ─────────────────────────────────────────────────
+            if mode == "validate":
+                notes_count    = len(imported_state.get("notes", []))
+                dec_count      = len(imported_state.get("key_decisions", []))
+                issue_count    = len(imported_state.get("known_issues", []))
+                task_count     = len(imported_state.get("completed_tasks", []))
+                return (
+                    f"チェックサム検証: OK ✅\n"
+                    f"  エクスポート日時: {exported_at}\n"
+                    f"  ソースプロジェクト: {source_project}\n"
+                    f"  メモ: {notes_count}件  決定事項: {dec_count}件  "
+                    f"問題: {issue_count}件  完了タスク: {task_count}件\n"
+                    f"インポートするには mode='merge' または mode='replace' を指定してください。"
+                )
 
-    with _state_transaction() as st:
-        if mode == "replace":
-            # 完全置換: インポート状態をそのまま使用する
-            for key, val in imported_state.items():
-                st[key] = val
-        else:
-            # merge: メモ・決定事項・既知の問題を追記する（重複は timestamp で簡易判定）
-            existing_note_ts   = {n.get("timestamp") for n in st.get("notes", [])}
-            existing_dec_ts    = {d.get("timestamp") for d in st.get("key_decisions", [])}
-            existing_issue_ids = {i.get("id") if isinstance(i, dict) else None
-                                  for i in st.get("known_issues", [])}
+            # ── merge / replace モード ──────────────────────────────────────────
+            if mode == "replace" and backup:
+                # 現在の状態を replace 前にバックアップ
+                ts  = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+                bak = _get_project_dir() / f"AI_STATE_before_import_{ts}.json"
+                try:
+                    current_state = _load_state()
+                    _write_atomic(bak, json.dumps(current_state, ensure_ascii=False, indent=2))
+                except Exception as e:
+                    return f"エラー: バックアップの作成に失敗しました: {e}"
 
-            for note in imported_state.get("notes", []):
-                if note.get("timestamp") not in existing_note_ts:
-                    st["notes"].append(note)
-                    merged_notes += 1
+            merged_notes    = 0
+            merged_decs     = 0
+            merged_issues   = 0
 
-            for dec in imported_state.get("key_decisions", []):
-                if dec.get("timestamp") not in existing_dec_ts:
-                    st["key_decisions"].append(dec)
-                    merged_decs += 1
+            with _state_transaction() as st:
+                if mode == "replace":
+                    # 完全置換: インポート状態をそのまま使用する
+                    for key, val in imported_state.items():
+                        st[key] = val
+                else:
+                    # merge: メモ・決定事項・既知の問題を追記する（重複は timestamp で簡易判定）
+                    existing_note_ts   = {n.get("timestamp") for n in st.get("notes", [])}
+                    existing_dec_ts    = {d.get("timestamp") for d in st.get("key_decisions", [])}
+                    existing_issue_ids = {i.get("id") if isinstance(i, dict) else None
+                                          for i in st.get("known_issues", [])}
 
-            for issue in imported_state.get("known_issues", []):
-                issue_id = issue.get("id") if isinstance(issue, dict) else None
-                if issue_id not in existing_issue_ids:
-                    st["known_issues"].append(issue)
-                    merged_issues += 1
+                    for note in imported_state.get("notes", []):
+                        if note.get("timestamp") not in existing_note_ts:
+                            st["notes"].append(note)
+                            merged_notes += 1
 
-    if mode == "replace":
-        backup_note = f"（バックアップ: {bak.name}）" if backup else ""
-        return (
-            f"状態を完全置換しました。{backup_note}\n"
-            f"  エクスポート日時: {exported_at}\n"
-            f"  ソースプロジェクト: {source_project}"
-        )
-    else:
-        return (
-            f"状態をマージしました。\n"
-            f"  追加メモ: {merged_notes}件  "
-            f"追加決定事項: {merged_decs}件  "
-            f"追加問題: {merged_issues}件\n"
-            f"  エクスポート日時: {exported_at}"
-        )
+                    for dec in imported_state.get("key_decisions", []):
+                        if dec.get("timestamp") not in existing_dec_ts:
+                            st["key_decisions"].append(dec)
+                            merged_decs += 1
+
+                    for issue in imported_state.get("known_issues", []):
+                        issue_id = issue.get("id") if isinstance(issue, dict) else None
+                        if issue_id not in existing_issue_ids:
+                            st["known_issues"].append(issue)
+                            merged_issues += 1
+
+            if mode == "replace":
+                backup_note = f"（バックアップ: {bak.name}）" if backup else ""
+                return (
+                    f"状態を完全置換しました。{backup_note}\n"
+                    f"  エクスポート日時: {exported_at}\n"
+                    f"  ソースプロジェクト: {source_project}"
+                )
+            else:
+                return (
+                    f"状態をマージしました。\n"
+                    f"  追加メモ: {merged_notes}件  "
+                    f"追加決定事項: {merged_decs}件  "
+                    f"追加問題: {merged_issues}件\n"
+                    f"  エクスポート日時: {exported_at}"
+                )
+    except RuntimeError as _pp_e:
+        return f"エラー: {_pp_e}"
 
 
 @mcp.tool()
-def collab_set_handoff_template(preset: str = "full") -> str:
+def collab_set_handoff_template(preset: str = "full", project_path: str = '') -> str:
     """
     HANDOFF.md の生成テンプレートを切り替える。
 
@@ -1941,28 +2079,32 @@ def collab_set_handoff_template(preset: str = "full") -> str:
     Args:
         preset: "full" / "minimal" / "review" / "debug"（デフォルト: "full"）
     """
-    if preset not in VALID_HANDOFF_TEMPLATES:
-        return (
-            f"エラー: preset は {VALID_HANDOFF_TEMPLATES} のいずれかを指定してください。\n"
-            f"指定値: '{preset}'"
-        )
+    try:
+        with state_mod.project_context(project_path):
+            if preset not in VALID_HANDOFF_TEMPLATES:
+                return (
+                    f"エラー: preset は {VALID_HANDOFF_TEMPLATES} のいずれかを指定してください。\n"
+                    f"指定値: '{preset}'"
+                )
 
-    with _state_transaction() as state:
-        old_preset = state.get("handoff_template", "full")
-        state["handoff_template"] = preset
+            with _state_transaction() as state:
+                old_preset = state.get("handoff_template", "full")
+                state["handoff_template"] = preset
 
-    preset_desc = {
-        "full":    "全セクション（デフォルト）",
-        "minimal": "現在タスク＋最新3件＋既知の問題のみ",
-        "review":  "full＋レビューポイントセクション",
-        "debug":   "full＋デバッグ情報セクション",
-    }
-    return (
-        f"ハンドオフテンプレートを変更しました。\n"
-        f"  {old_preset} → {preset}\n"
-        f"  内容: {preset_desc.get(preset, preset)}\n"
-        f"次回の collab_generate_handoff() / collab_checkpoint() から反映されます。"
-    )
+            preset_desc = {
+                "full":    "全セクション（デフォルト）",
+                "minimal": "現在タスク＋最新3件＋既知の問題のみ",
+                "review":  "full＋レビューポイントセクション",
+                "debug":   "full＋デバッグ情報セクション",
+            }
+            return (
+                f"ハンドオフテンプレートを変更しました。\n"
+                f"  {old_preset} → {preset}\n"
+                f"  内容: {preset_desc.get(preset, preset)}\n"
+                f"次回の collab_generate_handoff() / collab_checkpoint() から反映されます。"
+            )
+    except RuntimeError as _pp_e:
+        return f"エラー: {_pp_e}"
 
 #endregion
 
@@ -2002,7 +2144,7 @@ def _print_help(version_only: bool = False) -> None:
 
 
 
-_VERSION = "1.0.19"
+_VERSION = "1.0.20"
 
 # ヘルプテキスト（AIが読むことを想定して日本語で詳述）
 _HELP_TEXT = f"""\

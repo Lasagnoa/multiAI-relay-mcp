@@ -186,6 +186,42 @@ def test_doctor_detects_dangerous_related_files(project):
     assert "WARN" in result or "ERR" in result
 
 
+def test_doctor_detects_empty_id(project):
+    """issue の id が空文字の場合を WARN として検出し、output='json' で issues_bad_id コードを確認する。"""
+    bad_issue = {
+        "id": "", "text": "テスト",
+        "added_at": "2026-05-28T00:00:00", "added_by": "claude",
+        "severity": "P2",
+    }
+    _write(project, _patch(_VALID_STATE, known_issues=[bad_issue]))
+    result = server.collab_doctor(
+        check_cli=False, check_ai_call=False,
+        check_issues=True, output="json",
+    )
+    payload = json.loads(result)
+    codes = [d["code"] for d in payload["diagnostics"]]
+    assert "issues_bad_id" in codes
+
+
+def test_doctor_detects_invalid_category(project):
+    """issue の category が不正形式（スペース・記号入り）の場合を WARN として検出し、
+    output='json' で issues_bad_category コードを確認する。"""
+    bad_issue = {
+        "id": "issue-001", "text": "テスト",
+        "added_at": "2026-05-28T00:00:00", "added_by": "claude",
+        "severity": "P2",
+        "category": "bad category!",  # スペース・記号入りカテゴリ
+    }
+    _write(project, _patch(_VALID_STATE, known_issues=[bad_issue]))
+    result = server.collab_doctor(
+        check_cli=False, check_ai_call=False,
+        check_issues=True, output="json",
+    )
+    payload = json.loads(result)
+    codes = [d["code"] for d in payload["diagnostics"]]
+    assert "issues_bad_category" in codes
+
+
 def test_doctor_detects_stale_lock_dead_pid(project):
     """存在しない PID のロックファイルを WARN として検出する。"""
     lock = project / "AI_STATE.lock"
