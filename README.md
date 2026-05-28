@@ -30,7 +30,7 @@ Claude Desktop と Codex Desktop が MCP を通じて状態を共有し、セッ
 ```json
 "multiai-relay-mcp": {
   "command": "uvx",
-  "args": ["--index-url", "https://test.pypi.org/simple/", "--extra-index-url", "https://pypi.org/simple/", "multiai-relay-mcp"]
+  "args": ["--index-url", "https://test.pypi.org/simple/", "--extra-index-url", "https://pypi.org/simple/", "multiai-relay-mcp==1.0.8"]
 }
 ```
 
@@ -44,10 +44,12 @@ Claude Desktop と Codex Desktop が MCP を通じて状態を共有し、セッ
 ```toml
 [mcp_servers.multiai-relay-mcp]
 command = 'uvx'
-args = ['--index-url', 'https://test.pypi.org/simple/', '--extra-index-url', 'https://pypi.org/simple/', 'multiai-relay-mcp']
+args = ['--index-url', 'https://test.pypi.org/simple/', '--extra-index-url', 'https://pypi.org/simple/', 'multiai-relay-mcp==1.0.8']
 ```
 
 > 追加後は Codex Desktop を再起動。
+
+> **バージョンアップ手順:** 設定の `==1.0.8` を新バージョンに書き換え → `clear-multiai-cache.sh` 実行（またはキャッシュ手動削除）→ Desktop 再起動 → `collab_summary()` でバージョン確認。
 
 ---
 
@@ -68,6 +70,12 @@ collab_record_decision("採用技術", "FastAPI を選択。非同期処理が�
 collab_record_issue("ログイン後のリダイレクトが未実装")
 collab_set_task("認証機能の実装")
 collab_record_file("src/auth.py")
+```
+
+### タスク終了時
+
+```
+collab_complete_task("実装完了。レビュー済み")
 ```
 
 ### セッション終了・引き継ぎ時
@@ -98,6 +106,7 @@ collab_checkpoint("認証の実装完了。次はテストを書く必要あり"
 | `collab_change_mode(mode)` | モード変更（plan / implement / review / debug） |
 | `collab_add_pending_task(title)` | 保留タスクを追加 |
 | `collab_close_pending_task(task_id, note?)` | 保留タスクを完了扱いに |
+| `collab_complete_task(note?)` | 現在のタスクを完了済みにする（新タスクなしで完了させる場合） |
 | `collab_generate_handoff(to_ai)` | 引き継ぎ文書を生成して担当AIを切り替え |
 | `collab_checkpoint(message, to_ai?)` | メモ追加と引き継ぎを一度に実行 |
 | `collab_consult(ai, question)` | 相手AIのCLIに相談（要CLI設定） |
@@ -163,7 +172,7 @@ Add to `%APPDATA%\Claude\claude_desktop_config.json` (Windows) or `~/Library/App
 ```json
 "multiai-relay-mcp": {
   "command": "uvx",
-  "args": ["--index-url", "https://test.pypi.org/simple/", "--extra-index-url", "https://pypi.org/simple/", "multiai-relay-mcp"]
+  "args": ["--index-url", "https://test.pypi.org/simple/", "--extra-index-url", "https://pypi.org/simple/", "multiai-relay-mcp==1.0.8"]
 }
 ```
 
@@ -177,10 +186,12 @@ Add to `~/.codex/config.toml`:
 ```toml
 [mcp_servers.multiai-relay-mcp]
 command = 'uvx'
-args = ['--index-url', 'https://test.pypi.org/simple/', '--extra-index-url', 'https://pypi.org/simple/', 'multiai-relay-mcp']
+args = ['--index-url', 'https://test.pypi.org/simple/', '--extra-index-url', 'https://pypi.org/simple/', 'multiai-relay-mcp==1.0.8']
 ```
 
 > Restart Codex Desktop after editing.
+
+> **Upgrading:** Change `==1.0.8` to the new version in your config → run `clear-multiai-cache.sh` (or delete cached `.rkyv` files manually) → restart Desktop → confirm with `collab_summary()`.
 
 ---
 
@@ -201,6 +212,12 @@ collab_record_decision("Framework", "Using FastAPI — async support required")
 collab_record_issue("Redirect after login not yet implemented")
 collab_set_task("Write auth tests")
 collab_record_file("src/auth.py")
+```
+
+### Completing a task
+
+```
+collab_complete_task("Implementation done, reviewed")
 ```
 
 ### End of session / handoff
@@ -231,6 +248,7 @@ A `HANDOFF.md` is generated. In a new Codex Desktop session, say: "Please read H
 | `collab_change_mode(mode)` | Switch mode (plan / implement / review / debug) |
 | `collab_add_pending_task(title)` | Add a pending task |
 | `collab_close_pending_task(task_id, note?)` | Mark pending task as done |
+| `collab_complete_task(note?)` | Mark current task as done (without starting a new one) |
 | `collab_generate_handoff(to_ai)` | Generate handoff doc and switch AI |
 | `collab_checkpoint(message, to_ai?)` | Add note + generate handoff in one call |
 | `collab_consult(ai, question)` | Consult the other AI's CLI (requires CLI setup) |

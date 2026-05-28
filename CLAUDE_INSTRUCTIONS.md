@@ -28,9 +28,11 @@
 ```json
 "multiai-relay-mcp": {
   "command": "uvx",
-  "args": ["--index-url", "https://test.pypi.org/simple/", "--extra-index-url", "https://pypi.org/simple/", "multiai-relay-mcp"]
+  "args": ["--index-url", "https://test.pypi.org/simple/", "--extra-index-url", "https://pypi.org/simple/", "multiai-relay-mcp==1.0.8"]
 }
 ```
+
+> **バージョンアップ手順:** `==1.0.8` を新バージョンに書き換え → `clear-multiai-cache.sh` 実行 → Claude Desktop 再起動 → `collab_summary()` で確認。
 
 > `uvx` のフルパスが必要な場合は `where uvx`（Windows）または `which uvx`（Mac/Linux）で確認。
 > 追加後は Claude Desktop を再起動。
@@ -72,6 +74,14 @@ collab_close_pending_task("pending-001", "対応完了")
 
 ---
 
+## タスク完了時
+
+新しいタスクを開始せずに現在のタスクを完了させる:
+
+```
+collab_complete_task("実装完了。レビュー待ち")
+```
+
 ## セッション終了時（必須）
 
 レートリミット前・引き継ぎ時:
@@ -103,6 +113,7 @@ collab_checkpoint("ここまで完了: ○○の実装。次は△△が必要",
 | `collab_change_mode(mode)` | モードを変更 |
 | `collab_add_pending_task(title)` | 保留タスクを追加 |
 | `collab_close_pending_task(task_id, note)` | 完了した保留タスクを一覧から取り除く |
+| `collab_complete_task(note)` | 現在のタスクを完了済みにする（新タスクなしで完了させる場合） |
 | `collab_generate_handoff(to_ai)` | 引き継ぎ文書を生成して担当AIを切り替える |
 | `collab_checkpoint(message, to_ai)` | メモ追加と引き継ぎを1回で実行 |
 | `collab_consult(ai, question)` | 相手AIのCLIに相談する（要CLI設定） |
@@ -130,12 +141,3 @@ collab_generate_handoff("codex")
 
 ---
 
-## CLIフォールバック（MCP非対応環境）
-
-MCPが使えない場合は `python multiai_relay.py` コマンドを使用:
-
-```sh
-python multiai_relay.py status
-python multiai_relay.py note "メモ内容"
-python multiai_relay.py handoff codex
-```

@@ -204,7 +204,76 @@ def _load_state() -> dict:
             migrated_issues.append(issue)
     state["known_issues"] = migrated_issues
 
+    # issue-013: ネストレコードの normalize（必須キー補完・型修正）
+    # 破損レコード（非dict）は除外し、残りを正規化してツールが例外終了しないようにする
+    state["notes"] = [
+        r for r in (_normalize_note(n) for n in state["notes"]) if r is not None
+    ]
+    state["key_decisions"] = [
+        r for r in (_normalize_decision(d) for d in state["key_decisions"]) if r is not None
+    ]
+    state["pending_tasks"] = [
+        r for r in (_normalize_pending_task(t) for t in state["pending_tasks"]) if r is not None
+    ]
+    state["completed_tasks"] = [
+        r for r in (_normalize_task(t) for t in state["completed_tasks"]) if r is not None
+    ]
+    state["completed_pending_tasks"] = [
+        r for r in (_normalize_pending_task(t) for t in state["completed_pending_tasks"]) if r is not None
+    ]
+    if state.get("current_task") is not None:
+        state["current_task"] = _normalize_task(state["current_task"])
+
     return state
+
+
+def _normalize_task(task) -> dict | None:
+    """タスクレコードの必須キーを補完・型修正する。非dictは None を返す"""
+    if not isinstance(task, dict):
+        return None
+    task.setdefault("id", "task-???")
+    task.setdefault("title", "（データ破損）")
+    task.setdefault("description", "")
+    task.setdefault("started_at", "")
+    task.setdefault("started_by", "unknown")
+    if not isinstance(task.get("files_modified"), list):
+        task["files_modified"] = []
+    return task
+
+
+def _normalize_note(note) -> dict | None:
+    """メモレコードの必須キーを補完・型修正する。非dictは None を返す"""
+    if not isinstance(note, dict):
+        return None
+    note.setdefault("timestamp", "")
+    note.setdefault("ai", "unknown")
+    if not isinstance(note.get("text"), str):
+        note["text"] = str(note.get("text", ""))
+    return note
+
+
+def _normalize_decision(dec) -> dict | None:
+    """決定事項レコードの必須キーを補完・型修正する。非dictは None を返す"""
+    if not isinstance(dec, dict):
+        return None
+    dec.setdefault("timestamp", "")
+    dec.setdefault("ai", "unknown")
+    dec.setdefault("title", "（データ破損）")
+    if not isinstance(dec.get("content"), str):
+        dec["content"] = str(dec.get("content", ""))
+    return dec
+
+
+def _normalize_pending_task(task) -> dict | None:
+    """保留タスクレコードの必須キーを補完・型修正する。非dictは None を返す"""
+    if not isinstance(task, dict):
+        return None
+    task.setdefault("id", "pending-???")
+    task.setdefault("title", "（データ破損）")
+    task.setdefault("description", "")
+    task.setdefault("added_at", "")
+    task.setdefault("added_by", "unknown")
+    return task
 
 class _StateLock:
     """
@@ -636,6 +705,16 @@ def collab_resolve_issue(issue_id: str, note: str = "") -> str:
         issue_id: 解決する問題のID（例: issue-001）。collab_status で確認できる。
         note: 解決内容の補足（省略可）
     """
+    # issue-016: note の入力検証
+    if note:
+        err = _validate_input(note, "note")
+        if err:
+            return err
+    # issue-014: issue_id の存在チェックを transaction 外で先に行う
+    pre = _load_state()
+    if not any(isinstance(i, dict) and i.get("id") == issue_id for i in pre.get("known_issues", [])):
+        return f"エラー: 問題が見つかりません: {issue_id}（collab_status で ID を確認してください）"
+
     with _state_transaction() as state:
         issues = state.get("known_issues", [])
         matched_index = next(
@@ -687,8 +766,20 @@ def collab_record_file(file_path: str) -> str:
     Args:
         file_path: ファイルパス（プロジェクトルートからの相対パス推奨）
     """
+    # issue-016: ファイルパスの長さ・インジェクションタグ・制御文字を検証
+    err = _validate_input(file_path, "file_path")
+    if err:
+        return err
+    if any(c in file_path for c in ("\n", "\r", "\0")):
+        return "エラー: file_path に改行・制御文字は使用できません。"
+
+    # issue-014: current_task チェックを transaction 外で行い、
+    #            エラー時に last_updated が更新されないようにする
+    if not _load_state().get("current_task"):
+        return "エラー: 現在のタスクが設定されていません。先に collab_set_task を呼び出してください。"
+
     with _state_transaction() as state:
-        if not state.get("current_task"):
+        if not state.get("current_task"):  # ロック内での二重確認
             return "エラー: 現在のタスクが設定されていません。先に collab_set_task を呼び出してください。"
         files = state["current_task"]["files_modified"]
         already = file_path in files
@@ -757,6 +848,15 @@ def collab_close_pending_task(task_id: str, note: str = "") -> str:
         task_id: 完了する保留タスクID（例: pending-001）
         note: 完了時に残す補足（省略可）
     """
+    # issue-016: note の入力検証
+    if note:
+        err = _validate_input(note, "note")
+        if err:
+            return err
+    # issue-014: task_id の存在チェックを transaction 外で先に行う
+    if not any(t.get("id") == task_id for t in _load_state().get("pending_tasks", [])):
+        return f"エラー: 保留タスクが見つかりません: {task_id}"
+
     with _state_transaction() as state:
         pending = state.get("pending_tasks", [])
         matched_index = next((i for i, task in enumerate(pending) if task.get("id") == task_id), None)
@@ -788,8 +888,12 @@ def collab_complete_task(note: str = "") -> str:
         err = _validate_input(note, "note")
         if err:
             return err
+    # issue-014: current_task チェックを transaction 外で先に行う
+    if not _load_state().get("current_task"):
+        return "エラー: 現在のタスクが設定されていません。collab_set_task() で先にタスクを設定してください。"
+
     with _state_transaction() as state:
-        if not state.get("current_task"):
+        if not state.get("current_task"):  # ロック内での二重確認
             return "エラー: 現在のタスクが設定されていません。collab_set_task() で先にタスクを設定してください。"
         task = state["current_task"]
         task["completed_at"] = _now_iso()
@@ -846,11 +950,13 @@ def collab_checkpoint(message: str, to_ai: str = "") -> str:
     err = _validate_input(message, "message")
     if err:
         return err
+    # issue-014: to_ai が明示指定されていて不正な場合は transaction 外で弾く
+    if to_ai and to_ai not in VALID_AI:
+        return "エラー: AIは 'claude' または 'codex' を指定してください。"
+
     with _state_transaction() as state:
         from_ai = state["current_ai"]
         target_ai = to_ai or ("claude" if from_ai == "codex" else "codex")
-        if target_ai not in VALID_AI:
-            return "エラー: AIは 'claude' または 'codex' を指定してください。"
         state["notes"].append({"timestamp": _now_iso(), "ai": from_ai, "text": message})
         _write_atomic(_handoff_file(), _build_handoff(state, from_ai, target_ai))
         state["current_ai"] = target_ai
@@ -891,7 +997,10 @@ def _build_handoff(state: dict, from_ai: str, to_ai: str) -> str:
             lines.append(f"**詳細:** <!-- USER INPUT -->{task['description']}<!-- /USER INPUT -->")
         lines.append(f"**開始:** {task['started_at'][:16]}  担当: {task.get('started_by', '?').upper()}")
         if task.get("files_modified"):
-            lines += ["", "**変更済みファイル:**"] + [f"- `{fp}`" for fp in task["files_modified"]]
+            # issue-016: files_modified もユーザー入力なのでタグでラップする
+            lines += ["", "**変更済みファイル:**"] + [
+                f"- <!-- USER INPUT -->`{fp}`<!-- /USER INPUT -->" for fp in task["files_modified"]
+            ]
     else:
         lines.append("*タスクは設定されていません。*")
 
@@ -939,11 +1048,12 @@ def _build_handoff(state: dict, from_ai: str, to_ai: str) -> str:
 
     lines += section("既知の問題・注意点",
         [_fmt_issue(i) for i in state.get("known_issues", [])])
+    # issue-016: 完了タスクのタイトルもユーザー入力なのでタグでラップする
     lines += section("完了済みタスク（最近5件）",
-        [f"- ✅ `{t['id']}` {t['title']} ({t.get('completed_at', '?')[:10]})"
+        [f"- ✅ `{t['id']}` <!-- USER INPUT -->{t['title']}<!-- /USER INPUT --> ({t.get('completed_at', '?')[:10]})"
          for t in state.get("completed_tasks", [])[-5:]])
     lines += section("完了した保留タスク（最近5件）",
-        [f"- ✅ `{t['id']}` {t['title']} ({t.get('completed_at', '?')[:10]})"
+        [f"- ✅ `{t['id']}` <!-- USER INPUT -->{t['title']}<!-- /USER INPUT --> ({t.get('completed_at', '?')[:10]})"
          for t in state.get("completed_pending_tasks", [])[-5:]])
 
     lines += [
@@ -1382,7 +1492,7 @@ def _print_help(version_only: bool = False) -> None:
 
 
 
-_VERSION = "1.0.7"
+_VERSION = "1.0.8"
 
 # ヘルプテキスト（AIが読むことを想定して日本語で詳述）
 _HELP_TEXT = f"""\
