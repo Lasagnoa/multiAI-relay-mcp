@@ -28,10 +28,10 @@
 ```toml
 [mcp_servers.multiai-relay-mcp]
 command = 'uvx'
-args = ['--index-url', 'https://test.pypi.org/simple/', '--extra-index-url', 'https://pypi.org/simple/', 'multiai-relay-mcp==1.0.21']
+args = ['--index-url', 'https://test.pypi.org/simple/', '--extra-index-url', 'https://pypi.org/simple/', 'multiai-relay-mcp==1.1.0']
 ```
 
-> **バージョンアップ手順:** `==1.0.11` を新バージョンに書き換え → `clear-multiai-cache.sh` 実行 → Codex Desktop 再起動 → `collab_summary()` で確認。
+> **バージョンアップ手順:** バージョン番号を新バージョンに書き換え → `uv cache clean` 実行 → Codex Desktop 再起動 → `collab_summary()` で確認。
 
 > `uvx` のフルパスが必要な場合は `where uvx`（Windows）または `which uvx`（Mac/Linux）で確認。
 > 追加後は Codex Desktop を再起動。
@@ -140,8 +140,18 @@ collab_checkpoint("ここまで完了: ○○の実装。次は△△が必要",
 | `collab_checkpoint(message, to_ai)` | メモ追加と引き継ぎを1回で実行 |
 | `collab_consult(ai, question)` | 相手AIのCLIに相談する（要CLI設定） |
 | `collab_discuss(ai, topic)` | 相手AIと複数ラウンド議論する（要CLI設定） |
+| `collab_request_review(ai, context)` | 相手AIにコードレビューを依頼する（要CLI設定） |
 | `collab_setup_cli(ai, command, ...)` | CLI呼び出し設定をカスタマイズ |
+| `collab_update_issue(issue_id, ...)` | 既存issueのseverity/category/tags/statusを更新する |
+| `collab_list_projects()` | 最近使ったプロジェクト一覧を表示する |
+| `collab_version()` | MCPサーバーと実行環境のバージョン情報を返す |
+| `collab_doctor()` | MCPサーバーと実行環境の健全性を診断する |
+| `collab_timeline()` | プロジェクトの更新イベントを時系列で返す |
 | `collab_cleanup_sessions(keep_per_ai)` | 古いセッションログを削除する |
+| `collab_cleanup_history(archive, dry_run)` | 古いメモ・完了タスクを整理してアーカイブする |
+| `collab_export_state()` | 現在の状態をSHA-256チェックサム付きJSONでエクスポートする |
+| `collab_import_state(path, mode, backup)` | エクスポートしたJSONから状態をインポートする |
+| `collab_set_handoff_template(template)` | HANDOFF.md の生成テンプレートを切り替える（full/minimal/review/debug） |
 
 ---
 

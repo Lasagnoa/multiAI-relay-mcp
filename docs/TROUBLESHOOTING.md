@@ -154,11 +154,11 @@ uv cache clean
 
 **対処順:**
 
-1. `clear-multiai-cache.sh` を実行（またはキャッシュを手動削除）
+1. `uv cache clean` を実行（またはキャッシュを手動削除）
 2. Claude Desktop / Codex Desktop を再起動
 3. `collab_version()` で確認
 
-`clear-multiai-cache.sh` の場所: プロジェクトルート直下。
+手動でキャッシュを削除する場合: Windows は `%LOCALAPPDATA%\uv\cache\` 以下の該当フォルダを削除してください。
 
 ---
 

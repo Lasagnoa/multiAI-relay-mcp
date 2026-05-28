@@ -2252,6 +2252,7 @@ MCPツール一覧（Claude Desktop / Codex Desktop から自動呼び出し）:
   collab_export_state       現在の状態をSHA-256チェックサム付きJSONでエクスポートする
   collab_import_state       エクスポートしたJSONから状態をインポートする
   collab_set_handoff_template  HANDOFF.md の生成テンプレートを切り替える
+  collab_list_projects      最近使ったプロジェクト一覧を表示する
 
 プロジェクトの切り替え:
   Desktop アプリを再起動しなくても collab_switch_project() を呼ぶだけで
