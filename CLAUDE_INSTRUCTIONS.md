@@ -141,3 +141,15 @@ collab_generate_handoff("codex")
 
 ---
 
+## トラブルシューティング
+
+問題が発生したらまず診断を実行:
+
+```
+collab_doctor()
+```
+
+詳細なエラー解決手順・既知の制限・状態復旧方法 → **[docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md)**
+
+---
+

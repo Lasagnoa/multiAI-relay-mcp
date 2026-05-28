@@ -369,7 +369,37 @@ def collab_doctor(
                     warn("issues_duplicate_id",
                          f"{list_key}: 重複する issue ID — {list(dict.fromkeys(dups))}",
                          "AI_STATE.json を手動確認して重複を解消してください")
-                if not non_dict_idx and not bad_sev and not dups:
+                # text / id フィールド検証（非文字列・空文字）
+                bad_text = [
+                    iss.get("id", f"[{_i}]") for _i, iss in enumerate(dict_issues)
+                    if not isinstance(iss.get("text"), str) or not str(iss.get("text", "")).strip()
+                ]
+                if bad_text:
+                    warn("issues_bad_text",
+                         f"{list_key}: text フィールドが空または非文字列 — {bad_text}",
+                         "AI_STATE.json を手動確認して text を文字列で設定してください")
+                # tags 形式検証 / related_files パス安全性検証
+                bad_tags: list = []
+                bad_files: list = []
+                for _i, _iss in enumerate(dict_issues):
+                    _iid = _iss.get("id", f"[{_i}]")
+                    _tv = _iss.get("tags")
+                    if _tv is not None:
+                        if not isinstance(_tv, list) or _validate_tags(_tv) is not None:
+                            bad_tags.append(_iid)
+                    _rv = _iss.get("related_files")
+                    if _rv is not None:
+                        if not isinstance(_rv, list) or _validate_related_files(_rv) is not None:
+                            bad_files.append(_iid)
+                if bad_tags:
+                    warn("issues_bad_tags",
+                         f"{list_key}: tags 形式不正 — {bad_tags}",
+                         "タグはスラッグ形式（英数字・ハイフン・アンダースコア）で指定してください")
+                if bad_files:
+                    warn("issues_bad_related_files",
+                         f"{list_key}: related_files に危険なパスあり — {bad_files}",
+                         "related_files はプロジェクト相対パスのみ。「..」や絶対パスは使用できません")
+                if not any([non_dict_idx, bad_sev, dups, bad_text, bad_tags, bad_files]):
                     ok(f"issues_{list_key}", f"{list_key}: {len(issues)}件 正常")
     #endregion
 
@@ -1972,7 +2002,7 @@ def _print_help(version_only: bool = False) -> None:
 
 
 
-_VERSION = "1.0.18"
+_VERSION = "1.0.19"
 
 # ヘルプテキスト（AIが読むことを想定して日本語で詳述）
 _HELP_TEXT = f"""\

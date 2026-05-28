@@ -15,7 +15,8 @@ Claude Desktop と Codex Desktop が MCP を通じて状態を共有し、セッ
 - 📦 **プロジェクトフォルダ外への書き込みゼロ** — ホームディレクトリを汚さない
 
 > **設計上の制約:** MCP サーバーは Desktop アプリごとに独立したプロセスとして起動されます。  
-> **1 プロセス = 1 アクティブプロジェクト** の前提です。複数プロジェクトを並行して扱う場合は、それぞれ別の Desktop インスタンス（または別の MCP サーバー設定）を使用してください。
+> **1 プロセス = 1 アクティブプロジェクト** の前提です。複数プロジェクトを並行して扱う場合は、それぞれ別の Desktop インスタンス（または別の MCP サーバー設定）を使用してください。  
+> 詳細・復旧手順 → [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md)
 
 ---
 
@@ -296,6 +297,18 @@ A `HANDOFF.md` is generated. In a new Codex Desktop session, say: "Please read H
 | `cli_config.json` | CLI config (created only when `collab_setup_cli()` is called) |
 
 > All writes are contained within your project folder. Nothing is written to your home directory.
+
+---
+
+## Troubleshooting / Known Limitations
+
+問題が発生したら、まず `collab_doctor()` を実行してください。
+
+```
+collab_doctor()
+```
+
+よくあるエラー・復旧手順の詳細は **[docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md)** を参照してください。
 
 ---
 

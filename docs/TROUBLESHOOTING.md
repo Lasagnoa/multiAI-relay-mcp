@@ -61,7 +61,7 @@ collab_import_state("パス/to/exported.json", mode="validate")
 collab_import_state("パス/to/exported.json", mode="replace", backup=True)
 ```
 
-`backup=True` で既存の `AI_STATE.json` を `.bak` にバックアップしてから置換します。
+`backup=True` で既存の `AI_STATE.json` を `AI_STATE_before_import_YYYYMMDD_HHMMSS.json` 形式でバックアップしてから置換します。
 
 ### ステップ 5: 再接続
 

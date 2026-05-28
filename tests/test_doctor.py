@@ -139,6 +139,53 @@ def test_doctor_detects_duplicate_issue_ids(project):
     assert "重複" in result or "duplicate" in result.lower() or "issue-001" in result
 
 
+def test_doctor_detects_non_string_text(project):
+    """issue の text フィールドが非文字列（整数）の場合を WARN として検出する。"""
+    bad_issue = {
+        "id": "issue-001", "text": 123,
+        "added_at": "2026-05-28T00:00:00", "added_by": "claude",
+        "severity": "P2",
+    }
+    _write(project, _patch(_VALID_STATE, known_issues=[bad_issue]))
+    result = server.collab_doctor(
+        check_cli=False, check_ai_call=False,
+        check_issues=True,
+    )
+    assert "WARN" in result or "ERR" in result
+
+
+def test_doctor_detects_invalid_tag_format(project):
+    """issue の tags に不正形式（スペース・記号を含む）がある場合を WARN として検出する。"""
+    bad_issue = {
+        "id": "issue-001", "text": "テスト",
+        "added_at": "2026-05-28T00:00:00", "added_by": "claude",
+        "severity": "P2",
+        "tags": ["ok-tag", "bad tag!"],  # スペース・記号入りタグ
+    }
+    _write(project, _patch(_VALID_STATE, known_issues=[bad_issue]))
+    result = server.collab_doctor(
+        check_cli=False, check_ai_call=False,
+        check_issues=True,
+    )
+    assert "WARN" in result or "ERR" in result
+
+
+def test_doctor_detects_dangerous_related_files(project):
+    """issue の related_files に危険なパス（..を含む）がある場合を WARN として検出する。"""
+    bad_issue = {
+        "id": "issue-001", "text": "テスト",
+        "added_at": "2026-05-28T00:00:00", "added_by": "claude",
+        "severity": "P2",
+        "related_files": ["../escape.txt"],  # パストラバーサル
+    }
+    _write(project, _patch(_VALID_STATE, known_issues=[bad_issue]))
+    result = server.collab_doctor(
+        check_cli=False, check_ai_call=False,
+        check_issues=True,
+    )
+    assert "WARN" in result or "ERR" in result
+
+
 def test_doctor_detects_stale_lock_dead_pid(project):
     """存在しない PID のロックファイルを WARN として検出する。"""
     lock = project / "AI_STATE.lock"
