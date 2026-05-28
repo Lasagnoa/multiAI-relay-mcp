@@ -14,6 +14,9 @@ Claude Desktop と Codex Desktop が MCP を通じて状態を共有し、セッ
 - 🔒 **安全な並行書き込み** — ファイルロック＋アトミック書き込みで、Claude/Codex が同時に更新しても状態が壊れない
 - 📦 **プロジェクトフォルダ外への書き込みゼロ** — ホームディレクトリを汚さない
 
+> **設計上の制約:** MCP サーバーは Desktop アプリごとに独立したプロセスとして起動されます。  
+> **1 プロセス = 1 アクティブプロジェクト** の前提です。複数プロジェクトを並行して扱う場合は、それぞれ別の Desktop インスタンス（または別の MCP サーバー設定）を使用してください。
+
 ---
 
 ## セットアップ
@@ -30,7 +33,7 @@ Claude Desktop と Codex Desktop が MCP を通じて状態を共有し、セッ
 ```json
 "multiai-relay-mcp": {
   "command": "uvx",
-  "args": ["--index-url", "https://test.pypi.org/simple/", "--extra-index-url", "https://pypi.org/simple/", "multiai-relay-mcp==1.0.11"]
+  "args": ["--index-url", "https://test.pypi.org/simple/", "--extra-index-url", "https://pypi.org/simple/", "multiai-relay-mcp==1.0.14"]
 }
 ```
 
@@ -44,7 +47,7 @@ Claude Desktop と Codex Desktop が MCP を通じて状態を共有し、セッ
 ```toml
 [mcp_servers.multiai-relay-mcp]
 command = 'uvx'
-args = ['--index-url', 'https://test.pypi.org/simple/', '--extra-index-url', 'https://pypi.org/simple/', 'multiai-relay-mcp==1.0.11']
+args = ['--index-url', 'https://test.pypi.org/simple/', '--extra-index-url', 'https://pypi.org/simple/', 'multiai-relay-mcp==1.0.14']
 ```
 
 > 追加後は Codex Desktop を再起動。
@@ -98,7 +101,8 @@ collab_checkpoint("認証の実装完了。次はテストを書く必要あり"
 | `collab_set_task(title)` | 現在タスクを設定 |
 | `collab_add_note(message)` | メモを追加 |
 | `collab_record_decision(title, content)` | 決定事項を記録 |
-| `collab_record_issue(message)` | 問題・注意点を記録（issue-NNN ID 付き） |
+| `collab_record_issue(message, severity?, category?, tags?, related_files?)` | 問題・注意点を記録（issue-NNN ID 付き、深刻度P0〜P3） |
+| `collab_update_issue(issue_id, severity?, category?, tags?, add_tags?, remove_tags?, ...)` | 既存 issue のメタデータを更新 |
 | `collab_resolve_issue(issue_id, note?)` | 問題を解決済みにする |
 | `collab_list_resolved()` | 解決済み問題の一覧を表示 |
 | `collab_search(query)` | キーワードで全データを横断検索 |
@@ -117,6 +121,10 @@ collab_checkpoint("認証の実装完了。次はテストを書く必要あり"
 | `collab_doctor(check_cli?, check_state?, ...)` | MCPサーバーと環境の健全性を診断（OK/WARN/ERR） |
 | `collab_timeline(limit?, since?, actor?, event_type?)` | プロジェクトの更新イベントを時系列で表示 |
 | `collab_cleanup_sessions(keep_per_ai?)` | 古いセッションログを削除 |
+| `collab_cleanup_history(keep_notes?, keep_completed_tasks?, archive?, dry_run?)` | 古いメモ・完了タスクを整理してアーカイブ |
+| `collab_export_state(output_path?, include_sessions?, redact_cli_config?)` | 状態をSHA-256チェックサム付きJSONでエクスポート |
+| `collab_import_state(input_path, mode?, backup?)` | エクスポートJSONから状態をインポート（validate/merge/replace） |
+| `collab_set_handoff_template(preset)` | HANDOFF.md テンプレートを切り替え（full/minimal/review/debug） |
 | `collab_current_project()` | 現在のプロジェクトパスを表示 |
 
 ---
@@ -126,6 +134,7 @@ collab_checkpoint("認証の実装完了。次はテストを書く必要あり"
 | ファイル | 用途 |
 |----------|------|
 | `AI_STATE.json` | 共有状態（タスク・メモ・決定事項など） |
+| `AI_STATE.archive.json` | アーカイブ済みの古いメモ・完了タスク（collab_cleanup_history で生成） |
 | `HANDOFF.md` | 引き継ぎ文書 |
 | `ai_sessions/` | セッションログ |
 | `AI_STATE.lock` | 一時ロックファイル（処理後即削除） |
@@ -159,6 +168,9 @@ A collaborative development system that lets Claude Desktop and Codex Desktop sh
 - 🔒 **Safe Concurrent Writes** — File locking + atomic writes prevent state corruption when Claude and Codex update simultaneously
 - 📦 **Zero writes outside project folder** — No home directory pollution
 
+> **Design constraint:** The MCP server runs as a separate process per Desktop app.  
+> **1 process = 1 active project.** To work on multiple projects in parallel, use separate Desktop instances or separate MCP server configurations.
+
 ---
 
 ## Setup
@@ -176,7 +188,7 @@ Add to `%APPDATA%\Claude\claude_desktop_config.json` (Windows) or `~/Library/App
 ```json
 "multiai-relay-mcp": {
   "command": "uvx",
-  "args": ["--index-url", "https://test.pypi.org/simple/", "--extra-index-url", "https://pypi.org/simple/", "multiai-relay-mcp==1.0.11"]
+  "args": ["--index-url", "https://test.pypi.org/simple/", "--extra-index-url", "https://pypi.org/simple/", "multiai-relay-mcp==1.0.14"]
 }
 ```
 
@@ -190,7 +202,7 @@ Add to `~/.codex/config.toml`:
 ```toml
 [mcp_servers.multiai-relay-mcp]
 command = 'uvx'
-args = ['--index-url', 'https://test.pypi.org/simple/', '--extra-index-url', 'https://pypi.org/simple/', 'multiai-relay-mcp==1.0.11']
+args = ['--index-url', 'https://test.pypi.org/simple/', '--extra-index-url', 'https://pypi.org/simple/', 'multiai-relay-mcp==1.0.14']
 ```
 
 > Restart Codex Desktop after editing.
@@ -244,7 +256,8 @@ A `HANDOFF.md` is generated. In a new Codex Desktop session, say: "Please read H
 | `collab_set_task(title)` | Set current task |
 | `collab_add_note(message)` | Add a note |
 | `collab_record_decision(title, content)` | Record a decision |
-| `collab_record_issue(message)` | Record an issue (assigned issue-NNN ID) |
+| `collab_record_issue(message, severity?, category?, tags?, related_files?)` | Record an issue (P0–P3 severity, tags, related files) |
+| `collab_update_issue(issue_id, severity?, category?, tags?, add_tags?, remove_tags?, ...)` | Update existing issue metadata |
 | `collab_resolve_issue(issue_id, note?)` | Mark issue as resolved |
 | `collab_list_resolved()` | List resolved issues |
 | `collab_search(query)` | Cross-search all data by keyword |
@@ -263,6 +276,10 @@ A `HANDOFF.md` is generated. In a new Codex Desktop session, say: "Please read H
 | `collab_doctor(check_cli?, check_state?, ...)` | Diagnose MCP server and environment health (OK/WARN/ERR) |
 | `collab_timeline(limit?, since?, actor?, event_type?)` | Show project events in chronological order |
 | `collab_cleanup_sessions(keep_per_ai?)` | Delete old session logs |
+| `collab_cleanup_history(keep_notes?, keep_completed_tasks?, archive?, dry_run?)` | Archive old notes and completed tasks |
+| `collab_export_state(output_path?, include_sessions?, redact_cli_config?)` | Export state as SHA-256-checksummed JSON |
+| `collab_import_state(input_path, mode?, backup?)` | Import exported state (validate/merge/replace) |
+| `collab_set_handoff_template(preset)` | Switch HANDOFF.md template (full/minimal/review/debug) |
 | `collab_current_project()` | Show current project path |
 
 ---
@@ -272,6 +289,7 @@ A `HANDOFF.md` is generated. In a new Codex Desktop session, say: "Please read H
 | File | Purpose |
 |------|---------|
 | `AI_STATE.json` | Shared state (tasks, notes, decisions, etc.) |
+| `AI_STATE.archive.json` | Archived old notes/tasks (created by `collab_cleanup_history()`) |
 | `HANDOFF.md` | Handoff document |
 | `ai_sessions/` | Session logs |
 | `AI_STATE.lock` | Temporary lock file (auto-deleted after use) |

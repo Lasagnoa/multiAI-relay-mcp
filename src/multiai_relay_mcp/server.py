@@ -11,6 +11,8 @@ ClaudeとCodexが共通のツール群を通じて状態を共有するMCPサー
 """
 
 import copy
+import hashlib
+import re
 import json
 import datetime
 import os
@@ -43,8 +45,24 @@ DEFAULT_CLI_CONFIG: dict = {
     },
 }
 
-VALID_MODES = ["plan", "implement", "review", "debug"]
-VALID_AI    = ["claude", "codex"]
+VALID_MODES      = ["plan", "implement", "review", "debug"]
+VALID_AI         = ["claude", "codex"]
+VALID_SEVERITIES = ["P0", "P1", "P2", "P3"]       # P0=最優先, P3=低優先
+VALID_ISSUE_STATUSES = ["open", "deferred"]         # resolved は collab_resolve_issue が担当
+
+# severity → 絵文字マッピング（HANDOFF / status 表示用）
+_SEVERITY_EMOJI: dict[str, str] = {
+    "P0": "🔴", "P1": "🟠", "P2": "🟡", "P3": "🟢",
+}
+
+# Issue フィールドの入力制限
+_MAX_TAG_LEN      = 30   # タグ1件の最大文字数
+_MAX_TAGS         = 10   # タグの最大件数
+_MAX_CATEGORY_LEN = 50   # カテゴリの最大文字数
+_MAX_RELATED_FILES = 10  # related_files の最大件数
+
+# タグ・カテゴリの許可文字パターン（ASCII英数字・ハイフン・アンダースコア）
+_SLUG_RE = re.compile(r'^[\w\-]+$', re.ASCII)
 
 MODE_LABELS: dict[str, str] = {
     "plan":      "仕様検討・設計",
@@ -75,7 +93,11 @@ _STATE_DEFAULTS: dict = {
     "resolved_issues":         [],
     "pending_tasks":           [],
     "completed_pending_tasks": [],
+    "handoff_template":        "full",
 }
+
+# ハンドオフテンプレートプリセット一覧
+VALID_HANDOFF_TEMPLATES = ["full", "minimal", "review", "debug"]
 
 #endregion
 
@@ -96,17 +118,34 @@ mcp = FastMCP(
 #region プロジェクトディレクトリ解決
 
 def _get_project_dir() -> Path:
-    """現在のプロジェクトディレクトリをメモリから取得する"""
+    """
+    現在のプロジェクトディレクトリをメモリから取得する。
+
+    issue-006 短期対処: プロジェクトパスが削除・移動された場合も即座に検出する。
+    1プロセス=1アクティブプロジェクト前提の設計制限については README を参照。
+    """
     if _current_project is None:
         raise RuntimeError(
             "現在のプロジェクトが設定されていません。\n"
             "collab_switch_project('プロジェクトのフルパス') を呼び出してください。"
+        )
+    if not _current_project.exists():
+        raise RuntimeError(
+            f"プロジェクトディレクトリが見つかりません: {_current_project}\n"
+            "ディレクトリが削除・移動された可能性があります。\n"
+            "collab_switch_project() で正しいパスを再設定してください。"
+        )
+    if not _current_project.is_dir():
+        raise RuntimeError(
+            f"プロジェクトパスがディレクトリではありません: {_current_project}\n"
+            "collab_switch_project() で正しいパスを再設定してください。"
         )
     return _current_project
 
 def _state_file()   -> Path: return _get_project_dir() / "AI_STATE.json"
 def _handoff_file() -> Path: return _get_project_dir() / "HANDOFF.md"
 def _sessions_dir() -> Path: return _get_project_dir() / "ai_sessions"
+def _archive_file() -> Path: return _get_project_dir() / "AI_STATE.archive.json"
 
 #endregion
 
@@ -114,6 +153,47 @@ def _sessions_dir() -> Path: return _get_project_dir() / "ai_sessions"
 
 # HANDOFF.md の信頼境界タグ（このタグを含む入力は拒否する）
 _INJECTION_TAG = "<!-- /USER INPUT -->"
+
+def _validate_tags(tags: list, field: str = "tags") -> str | None:
+    """タグリストの件数・文字数・文字種を検証する。問題があればエラーメッセージを返す。"""
+    if not isinstance(tags, list):
+        return f"エラー: {field} はリストで指定してください。"
+    if len(tags) > _MAX_TAGS:
+        return f"エラー: {field} は最大{_MAX_TAGS}件です（現在{len(tags)}件）。"
+    for tag in tags:
+        if not isinstance(tag, str):
+            return f"エラー: {field} の各要素は文字列である必要があります。"
+        if not tag:
+            return f"エラー: {field} に空のタグは指定できません。"
+        if len(tag) > _MAX_TAG_LEN:
+            return f"エラー: {field} の各タグは最大{_MAX_TAG_LEN}文字です: {tag!r}"
+        if not _SLUG_RE.match(tag):
+            return (f"エラー: {field} はアルファベット・数字・ハイフン・アンダースコアのみ使用できます: {tag!r}")
+    return None
+
+
+def _validate_related_files(files: list) -> str | None:
+    """related_files リストのパス安全性を検証する。問題があればエラーメッセージを返す。"""
+    if not isinstance(files, list):
+        return "エラー: related_files はリストで指定してください。"
+    if len(files) > _MAX_RELATED_FILES:
+        return f"エラー: related_files は最大{_MAX_RELATED_FILES}件です（現在{len(files)}件）。"
+    for fp in files:
+        if not isinstance(fp, str):
+            return "エラー: related_files の各要素は文字列である必要があります。"
+        if not fp:
+            return "エラー: related_files に空のパスは指定できません。"
+        if len(fp) > _MAX_INPUT_LEN:
+            return f"エラー: ファイルパスが長すぎます（最大{_MAX_INPUT_LEN}文字）。"
+        if any(c in fp for c in ('\n', '\r', '\t', '\0')):
+            return f"エラー: ファイルパスに制御文字を含めることはできません: {fp!r}"
+        norm = fp.replace('\\', '/')
+        if any(part == '..' for part in norm.split('/')):
+            return f"エラー: ファイルパスに「..」を含めることはできません: {fp!r}"
+        if Path(fp).is_absolute():
+            return f"エラー: related_files には相対パスを指定してください（絶対パス不可）: {fp!r}"
+    return None
+
 
 def _validate_input(text: str, field: str = "入力", max_len: int = _MAX_INPUT_LEN) -> str | None:
     """
@@ -193,7 +273,7 @@ def _load_state() -> dict:
     if state.get("current_task") is not None and not isinstance(state["current_task"], dict):
         state["current_task"] = None
 
-    # known_issues: 旧フォーマット（文字列）を構造化dictに移行
+    # known_issues: 旧フォーマット（文字列）を構造化dictに移行してから normalize
     migrated_issues = []
     for i, issue in enumerate(state.get("known_issues", [])):
         if isinstance(issue, str):
@@ -205,7 +285,16 @@ def _load_state() -> dict:
             })
         else:
             migrated_issues.append(issue)
-    state["known_issues"] = migrated_issues
+    state["known_issues"] = [
+        r for r in (_normalize_issue(iss, resolved=False) for iss in migrated_issues)
+        if r is not None
+    ]
+
+    # resolved_issues も同様に normalize（status=resolved を補完）
+    state["resolved_issues"] = [
+        r for r in (_normalize_issue(iss, resolved=True) for iss in state.get("resolved_issues", []))
+        if r is not None
+    ]
 
     # issue-013: ネストレコードの normalize（必須キー補完・型修正）
     # 破損レコード（非dict）は除外し、残りを正規化してツールが例外終了しないようにする
@@ -277,6 +366,72 @@ def _normalize_pending_task(task) -> dict | None:
     task.setdefault("added_at", "")
     task.setdefault("added_by", "unknown")
     return task
+
+
+def _normalize_issue(issue, resolved: bool = False) -> dict | None:
+    """
+    Issue レコードの必須キーを補完・型修正する。非dictは None を返す。
+
+    - resolved=False: known_issues 用（status は "open" をデフォルト）
+    - resolved=True : resolved_issues 用（status は "resolved" に固定）
+    - 旧テキスト内の [P0]〜[P3] プレフィックスを severity に抽出（本文はそのまま保持）
+    """
+    if not isinstance(issue, dict):
+        return None
+    issue.setdefault("id", "issue-???")
+    issue.setdefault("text", "（データ破損）")
+    issue.setdefault("added_at", "")
+    issue.setdefault("added_by", "unknown")
+
+    # [P0]〜[P3] プレフィックスを severity に自動抽出（まだ severity フィールドがない場合）
+    if "severity" not in issue:
+        m = re.match(r'^\[P([0-3])\]\s*', issue["text"])
+        issue["severity"] = f"P{m.group(1)}" if m else "P2"
+    if issue.get("severity") not in VALID_SEVERITIES:
+        issue["severity"] = "P2"
+
+    # category: slug 文字列（不正値はデフォルトにリセット）
+    if not isinstance(issue.get("category"), str) or not issue.get("category"):
+        issue["category"] = "general"
+    elif not _SLUG_RE.match(issue["category"]) or len(issue["category"]) > _MAX_CATEGORY_LEN:
+        issue["category"] = "general"
+
+    # tags: slug 配列（不正要素は除去）
+    raw_tags = issue.get("tags", [])
+    if not isinstance(raw_tags, list):
+        raw_tags = []
+    issue["tags"] = [
+        t for t in raw_tags
+        if isinstance(t, str) and t and _SLUG_RE.match(t) and len(t) <= _MAX_TAG_LEN
+    ][:_MAX_TAGS]
+
+    # related_files: 文字列配列（制御文字・絶対パス・.. を除去）
+    raw_files = issue.get("related_files", [])
+    if not isinstance(raw_files, list):
+        raw_files = []
+    clean_files = []
+    for fp in raw_files:
+        if not isinstance(fp, str) or not fp:
+            continue
+        if any(c in fp for c in ('\n', '\r', '\t', '\0')):
+            continue
+        if any(part == '..' for part in fp.replace('\\', '/').split('/')):
+            continue
+        if Path(fp).is_absolute():
+            continue
+        clean_files.append(fp)
+    issue["related_files"] = clean_files[:_MAX_RELATED_FILES]
+
+    # status: resolved_issues は "resolved" 固定、known_issues は open/deferred
+    if resolved:
+        issue["status"] = "resolved"
+        issue.setdefault("resolved_at", "")
+        issue.setdefault("resolved_by", "unknown")
+    else:
+        if issue.get("status") not in VALID_ISSUE_STATUSES:
+            issue["status"] = "open"
+
+    return issue
 
 class _StateLock:
     """
@@ -520,10 +675,25 @@ def collab_switch_project(project_path: str, project_name: str = "") -> str:
 
 @mcp.tool()
 def collab_current_project() -> str:
-    """現在アクティブなプロジェクトのパスを確認する。"""
+    """現在アクティブなプロジェクトのパスと存在状態を確認する。"""
     if _current_project is None:
         return "現在のプロジェクトは設定されていません。collab_switch_project() を呼び出してください。"
-    return f"現在のプロジェクト: {_current_project}"
+    if not _current_project.exists():
+        return (
+            f"⚠️ プロジェクトディレクトリが見つかりません: {_current_project}\n"
+            "ディレクトリが削除・移動された可能性があります。\n"
+            "collab_switch_project() で正しいパスを再設定してください。"
+        )
+    if not _current_project.is_dir():
+        return (
+            f"⚠️ 設定パスがディレクトリではありません: {_current_project}\n"
+            "collab_switch_project() で正しいパスを再設定してください。"
+        )
+    state_ok = (_current_project / "AI_STATE.json").exists()
+    return (
+        f"現在のプロジェクト: {_current_project}\n"
+        f"  状態ファイル: {'存在 ✅' if state_ok else '未作成 ⚠️（collab_switch_project で初期化してください）'}"
+    )
 
 #endregion
 
@@ -726,9 +896,21 @@ def collab_status(calling_ai: str = "") -> str:
 
     if state.get("known_issues"):
         lines += ["", "## 既知の問題・注意点"]
-        for issue in state["known_issues"]:
+        # severity 昇順（P0優先）でソート
+        sorted_issues = sorted(
+            state["known_issues"],
+            key=lambda i: VALID_SEVERITIES.index(i.get("severity", "P2"))
+            if isinstance(i, dict) and i.get("severity") in VALID_SEVERITIES else 99
+        )
+        for issue in sorted_issues:
             if isinstance(issue, dict):
-                lines.append(f"- [{issue['id']}] {issue['text']}")
+                emoji = _SEVERITY_EMOJI.get(issue.get("severity", "P2"), "")
+                sev   = issue.get("severity", "P2")
+                stat  = "" if issue.get("status", "open") == "open" else f" [{issue['status']}]"
+                tags  = f" ({', '.join(issue['tags'])})" if issue.get("tags") else ""
+                # 旧テキストに [P0]〜[P3] プレフィックスが残っている場合は表示上だけ除去する
+                text  = re.sub(r'^\[P[0-3]\]\s*', '', issue['text'])
+                lines.append(f"- {emoji} [{issue['id']}][{sev}]{stat} {text}{tags}")
             else:
                 lines.append(f"- {issue}")
 
@@ -805,11 +987,36 @@ def collab_record_decision(title: str, content: str) -> str:
 
 
 @mcp.tool()
-def collab_record_issue(message: str) -> str:
-    """既知の問題・バグ・注意点を記録する。"""
-    err = _validate_input(message, "message")
+def collab_record_issue(
+    message: str,
+    severity: str = "P2",
+    category: str = "general",
+    tags: list | None = None,
+    related_files: list | None = None,
+) -> str:
+    """
+    既知の問題・バグ・注意点を記録する。
+
+    Args:
+        message:       問題の説明
+        severity:      深刻度 P0（最高）/ P1 / P2（既定）/ P3（低）
+        category:      カテゴリ（slug形式: 英数字・ハイフン・アンダースコア、例: "auth"）
+        tags:          タグリスト（省略可、例: ["routing", "login"]）
+        related_files: 関連ファイルのプロジェクト相対パスリスト（省略可）
+    """
+    tags         = tags or []
+    related_files = related_files or []
+
+    # 入力検証
+    err = (_validate_input(message, "message")
+           or (severity not in VALID_SEVERITIES and f"エラー: severity は {VALID_SEVERITIES} のいずれかを指定してください。")
+           or (not _SLUG_RE.match(category) and f"エラー: category はslug形式（英数字・ハイフン・アンダースコア）で指定してください: {category!r}")
+           or (len(category) > _MAX_CATEGORY_LEN and f"エラー: category は最大{_MAX_CATEGORY_LEN}文字です。")
+           or _validate_tags(tags)
+           or _validate_related_files(related_files))
     if err:
         return err
+
     with _state_transaction() as state:
         # 既存・解決済み両方のIDを参照して単調増加IDを採番
         all_issues = state.get("known_issues", []) + state.get("resolved_issues", [])
@@ -822,14 +1029,20 @@ def collab_record_issue(message: str) -> str:
         ]
         issue_id = f"issue-{max(issue_numbers, default=0) + 1:03d}"
         state["known_issues"].append({
-            "id": issue_id,
-            "text": message,
-            "added_at": _now_iso(),
-            "added_by": state["current_ai"],
+            "id":            issue_id,
+            "text":          message,
+            "severity":      severity,
+            "category":      category,
+            "tags":          tags,
+            "related_files": related_files,
+            "status":        "open",
+            "added_at":      _now_iso(),
+            "added_by":      state["current_ai"],
         })
         ai = state["current_ai"]
-    _append_session_log(ai, f"問題記録: [{issue_id}] {message}")
-    return f"問題を記録しました: [{issue_id}] {message}"
+    emoji = _SEVERITY_EMOJI.get(severity, "")
+    _append_session_log(ai, f"問題記録: [{issue_id}][{severity}] {message}")
+    return f"問題を記録しました: {emoji} [{issue_id}][{severity}] {message}"
 
 
 @mcp.tool()
@@ -872,6 +1085,132 @@ def collab_resolve_issue(issue_id: str, note: str = "") -> str:
 
 
 @mcp.tool()
+def collab_update_issue(
+    issue_id: str,
+    message: str | None = None,
+    severity: str | None = None,
+    category: str | None = None,
+    tags: list | None = None,
+    add_tags: list | None = None,
+    remove_tags: list | None = None,
+    related_files: list | None = None,
+    add_related_files: list | None = None,
+    remove_related_files: list | None = None,
+    status: str | None = None,
+) -> str:
+    """
+    既存の未解決 issue のメタデータを更新する。
+
+    解決済みにする場合は collab_resolve_issue() を使うこと（このツールでは resolved 化不可）。
+
+    Args:
+        issue_id:            更新する issue の ID（例: "issue-001"）
+        message:             説明文を置換する（省略で変更なし）
+        severity:            P0/P1/P2/P3 に変更（省略で変更なし）
+        category:            カテゴリを変更（省略で変更なし）
+        tags:                タグリストを完全置換（省略で変更なし）
+        add_tags:            タグを追記（tags と同時指定不可）
+        remove_tags:         タグを削除（tags と同時指定不可）
+        related_files:       関連ファイルリストを完全置換（省略で変更なし）
+        add_related_files:   関連ファイルを追記（related_files と同時指定不可）
+        remove_related_files:関連ファイルを削除（related_files と同時指定不可）
+        status:              "open" / "deferred" に変更（省略で変更なし）
+    """
+    # 排他チェック
+    if tags is not None and (add_tags is not None or remove_tags is not None):
+        return "エラー: tags と add_tags/remove_tags は同時に指定できません。"
+    if related_files is not None and (add_related_files is not None or remove_related_files is not None):
+        return "エラー: related_files と add_related_files/remove_related_files は同時に指定できません。"
+
+    # 入力検証
+    if message is not None:
+        err = _validate_input(message, "message")
+        if err:
+            return err
+    if severity is not None and severity not in VALID_SEVERITIES:
+        return f"エラー: severity は {VALID_SEVERITIES} のいずれかを指定してください。"
+    if category is not None:
+        if not _SLUG_RE.match(category):
+            return f"エラー: category はslug形式で指定してください: {category!r}"
+        if len(category) > _MAX_CATEGORY_LEN:
+            return f"エラー: category は最大{_MAX_CATEGORY_LEN}文字です。"
+    if status is not None and status not in VALID_ISSUE_STATUSES:
+        return f"エラー: status は {VALID_ISSUE_STATUSES} のいずれかを指定してください（resolved 化は collab_resolve_issue を使ってください）。"
+    for tag_list, label in [(tags, "tags"), (add_tags, "add_tags"), (remove_tags, "remove_tags")]:
+        if tag_list is not None:
+            err = _validate_tags(tag_list, label)
+            if err:
+                return err
+    for file_list, label in [(related_files, "related_files"),
+                              (add_related_files, "add_related_files"),
+                              (remove_related_files, "remove_related_files")]:
+        if file_list is not None:
+            err = _validate_related_files(file_list)
+            if err:
+                return err
+
+    # issue-014: 存在チェックを transaction 外で先に行う
+    pre = _load_state()
+    if not any(isinstance(i, dict) and i.get("id") == issue_id for i in pre.get("known_issues", [])):
+        return f"エラー: 未解決の問題が見つかりません: {issue_id}（解決済み issue は更新不可）"
+
+    with _state_transaction() as state:
+        issue = next(
+            (i for i in state.get("known_issues", [])
+             if isinstance(i, dict) and i.get("id") == issue_id),
+            None,
+        )
+        if issue is None:
+            return f"エラー: 問題が見つかりません: {issue_id}"
+
+        if message is not None:
+            issue["text"] = message
+        if severity is not None:
+            issue["severity"] = severity
+        if category is not None:
+            issue["category"] = category
+        if status is not None:
+            issue["status"] = status
+
+        # tags の更新
+        if tags is not None:
+            issue["tags"] = tags
+        else:
+            current_tags = issue.get("tags", [])
+            if add_tags:
+                for t in add_tags:
+                    if t not in current_tags:
+                        current_tags.append(t)
+                issue["tags"] = current_tags[:_MAX_TAGS]
+            if remove_tags:
+                issue["tags"] = [t for t in issue.get("tags", []) if t not in remove_tags]
+
+        # related_files の更新
+        if related_files is not None:
+            issue["related_files"] = related_files
+        else:
+            current_files = issue.get("related_files", [])
+            if add_related_files:
+                for f in add_related_files:
+                    if f not in current_files:
+                        current_files.append(f)
+                issue["related_files"] = current_files[:_MAX_RELATED_FILES]
+            if remove_related_files:
+                issue["related_files"] = [f for f in issue.get("related_files", [])
+                                           if f not in remove_related_files]
+        ai = state["current_ai"]
+
+    emoji = _SEVERITY_EMOJI.get(issue.get("severity", "P2"), "")
+    _append_session_log(ai, f"問題更新: [{issue_id}]")
+    return (
+        f"問題を更新しました: {emoji} [{issue_id}][{issue.get('severity','?')}] {issue['text']}\n"
+        f"  category: {issue.get('category','?')}  "
+        f"tags: {issue.get('tags',[])}  "
+        f"status: {issue.get('status','?')}"
+    )
+
+
+@mcp.tool()
 def collab_list_resolved() -> str:
     """
     解決済みの問題一覧を表示する。
@@ -887,7 +1226,12 @@ def collab_list_resolved() -> str:
     for iss in reversed(resolved):  # 新しい順
         resolved_at = iss.get("resolved_at", "?")[:16]
         resolved_by = iss.get("resolved_by", "?").upper()
-        lines.append(f"- [{iss['id']}] {iss['text']}")
+        emoji = _SEVERITY_EMOJI.get(iss.get("severity", "P2"), "")
+        sev   = iss.get("severity", "?")
+        tags  = f" ({', '.join(iss['tags'])})" if iss.get("tags") else ""
+        # 旧テキストに [P0]〜[P3] プレフィックスが残っている場合は表示上だけ除去する
+        text  = re.sub(r'^\[P[0-3]\]\s*', '', iss['text'])
+        lines.append(f"- {emoji} [{iss['id']}][{sev}] {text}{tags}")
         lines.append(f"  解決: {resolved_at}  by {resolved_by}")
         if iss.get("resolution_note"):
             lines.append(f"  メモ: {iss['resolution_note']}")
@@ -1150,13 +1494,24 @@ def collab_checkpoint(message: str, to_ai: str = "", dry_run: bool = False) -> s
 #region ハンドオフ文書生成
 
 def _build_handoff(state: dict, from_ai: str, to_ai: str) -> str:
-    """ハンドオフ用マークダウン文書を生成する"""
+    """
+    ハンドオフ用マークダウン文書を生成する。
+    state['handoff_template'] に従い出力内容を切り替える。
+    - full    : 全セクション（デフォルト）
+    - minimal : 現在タスク＋最新メモ3件＋既知の問題のみ
+    - review  : full ＋ レビューポイントセクション
+    - debug   : full ＋ デバッグ情報セクション
+    """
+    template = state.get("handoff_template", "full")
     mode_label = MODE_LABELS.get(state["mode"], state["mode"])
+
+    # ── 共通ヘッダ ──────────────────────────────────────────────────────
     lines = [
         "# AI協働開発 ハンドオフドキュメント", "",
         f"> **引き継ぎ元:** {from_ai.upper()}　→　**引き継ぎ先:** {to_ai.upper()}",
         f"> **日時:** {_now_display()}　｜　**プロジェクト:** {state['project_name']}",
         f"> **モード:** {mode_label}　｜　**セッション:** #{state['session_count']}",
+        f"> **テンプレート:** {template}",
         "", "---", "", "## 現在のタスク", "",
     ]
 
@@ -1176,32 +1531,41 @@ def _build_handoff(state: dict, from_ai: str, to_ai: str) -> str:
     else:
         lines.append("*タスクは設定されていません。*")
 
+    # ── セクション構築ヘルパー ──────────────────────────────────────────
     def section(title, items, empty="*なし*"):
         return ["", "---", "", f"## {title}", ""] + (items if items else [empty])
 
-    lines += section("保留中のタスク",
-        [f"- [ ] <!-- USER INPUT -->{t['title']}<!-- /USER INPUT -->"
-         + (f" — <!-- USER INPUT -->{t['description']}<!-- /USER INPUT -->" if t.get("description") else "")
-         for t in state.get("pending_tasks", [])])
-    # 外部入力（ユーザーが記録した内容）はタグで囲んで信頼済み指示と区別する
-    notes = state.get("notes", [])
-    note_lines = []
-    if len(notes) > 10:
-        note_lines.append(f"- *過去{len(notes) - 10}件のメモを省略*")
-    note_lines += [
-        f"- `{n['timestamp'][:16]}` ({n['ai'].upper()}) <!-- USER INPUT -->{n['text']}<!-- /USER INPUT -->"
-        for n in notes[-10:]
-    ]
-    lines += section("最近のメモ（最新10件）", note_lines)
+    def _fmt_issue(iss) -> str:
+        if isinstance(iss, dict):
+            emoji = _SEVERITY_EMOJI.get(iss.get("severity", "P2"), "⚠️")
+            sev   = iss.get("severity", "?")
+            stat  = "" if iss.get("status", "open") == "open" else f" [{iss['status']}]"
+            tags  = f" ({', '.join(iss['tags'])})" if iss.get("tags") else ""
+            # 旧テキストに [P0]〜[P3] プレフィックスが残っている場合は表示上だけ除去する
+            text  = re.sub(r'^\[P[0-3]\]\s*', '', iss['text'])
+            return (f"- {emoji} [{iss['id']}][{sev}]{stat} "
+                    f"<!-- USER INPUT -->{text}<!-- /USER INPUT -->{tags}")
+        return f"- ⚠️ <!-- USER INPUT -->{iss}<!-- /USER INPUT -->"
 
-    decisions = state.get("key_decisions", [])
-    if decisions:
-        lines += ["", "---", "", "## 重要な決定事項", ""]
-        if len(decisions) > 10:
-            lines.append(f"*過去{len(decisions) - 10}件の決定事項を省略*")
-            lines.append("")
-        for dec in decisions[-10:]:
-            lines += [
+    def _note_lines(notes, limit: int) -> list[str]:
+        nl = []
+        if len(notes) > limit:
+            nl.append(f"- *過去{len(notes) - limit}件のメモを省略*")
+        nl += [
+            f"- `{n['timestamp'][:16]}` ({n['ai'].upper()}) <!-- USER INPUT -->{n['text']}<!-- /USER INPUT -->"
+            for n in notes[-limit:]
+        ]
+        return nl
+
+    def _decisions_section(decisions, limit: int = 10) -> list[str]:
+        if not decisions:
+            return ["", "---", "", "## 重要な決定事項", "", "*なし*"]
+        out = ["", "---", "", "## 重要な決定事項", ""]
+        if len(decisions) > limit:
+            out.append(f"*過去{len(decisions) - limit}件の決定事項を省略*")
+            out.append("")
+        for dec in decisions[-limit:]:
+            out += [
                 f"### <!-- USER INPUT -->{dec['title']}<!-- /USER INPUT -->",
                 f"*{dec['timestamp'][:10]}  by {dec['ai'].upper()}*",
                 "",
@@ -1210,24 +1574,97 @@ def _build_handoff(state: dict, from_ai: str, to_ai: str) -> str:
                 "<!-- /USER INPUT -->",
                 "",
             ]
+        return out
+
+    # ── テンプレート別セクション組み立て ───────────────────────────────
+    notes     = state.get("notes", [])
+    decisions = state.get("key_decisions", [])
+    # severity 昇順（P0優先）でソート済みのリストを全テンプレートで共用する
+    issues = sorted(
+        state.get("known_issues", []),
+        key=lambda i: VALID_SEVERITIES.index(i.get("severity", "P2"))
+        if isinstance(i, dict) and i.get("severity") in VALID_SEVERITIES else 99
+    )
+
+    if template == "minimal":
+        # 現在タスク（ヘッダ済み）＋ 最新メモ3件 ＋ 既知の問題のみ
+        lines += section("最近のメモ（最新3件）", _note_lines(notes, 3))
+        lines += section("既知の問題・注意点", [_fmt_issue(i) for i in issues])
+
+    elif template == "review":
+        # full ＋ レビューポイントセクション
+        lines += section("保留中のタスク",
+            [f"- [ ] <!-- USER INPUT -->{t['title']}<!-- /USER INPUT -->"
+             + (f" — <!-- USER INPUT -->{t['description']}<!-- /USER INPUT -->" if t.get("description") else "")
+             for t in state.get("pending_tasks", [])])
+        lines += section("最近のメモ（最新10件）", _note_lines(notes, 10))
+        lines += _decisions_section(decisions)
+        lines += section("既知の問題・注意点", [_fmt_issue(i) for i in issues])
+        lines += section("完了済みタスク（最近5件）",
+            [f"- ✅ `{t['id']}` <!-- USER INPUT -->{t['title']}<!-- /USER INPUT --> ({t.get('completed_at', '?')[:10]})"
+             for t in state.get("completed_tasks", [])[-5:]])
+        lines += section("完了した保留タスク（最近5件）",
+            [f"- ✅ `{t['id']}` <!-- USER INPUT -->{t['title']}<!-- /USER INPUT --> ({t.get('completed_at', '?')[:10]})"
+             for t in state.get("completed_pending_tasks", [])[-5:]])
+        # レビュー専用セクション
+        lines += [
+            "", "---", "", "## 📋 レビューポイント", "",
+            "以下の観点でレビューしてください:",
+            "- 実装が決定事項と一致しているか",
+            "- 既知の問題が解決されているか",
+            "- コードの品質・セキュリティ・パフォーマンス",
+            "- 次のフェーズに進む前に確認すべき点",
+        ]
+
+    elif template == "debug":
+        # full ＋ デバッグ情報セクション
+        lines += section("保留中のタスク",
+            [f"- [ ] <!-- USER INPUT -->{t['title']}<!-- /USER INPUT -->"
+             + (f" — <!-- USER INPUT -->{t['description']}<!-- /USER INPUT -->" if t.get("description") else "")
+             for t in state.get("pending_tasks", [])])
+        lines += section("最近のメモ（最新10件）", _note_lines(notes, 10))
+        lines += _decisions_section(decisions)
+        lines += section("既知の問題・注意点", [_fmt_issue(i) for i in issues])
+        lines += section("完了済みタスク（最近5件）",
+            [f"- ✅ `{t['id']}` <!-- USER INPUT -->{t['title']}<!-- /USER INPUT --> ({t.get('completed_at', '?')[:10]})"
+             for t in state.get("completed_tasks", [])[-5:]])
+        lines += section("完了した保留タスク（最近5件）",
+            [f"- ✅ `{t['id']}` <!-- USER INPUT -->{t['title']}<!-- /USER INPUT --> ({t.get('completed_at', '?')[:10]})"
+             for t in state.get("completed_pending_tasks", [])[-5:]])
+        # デバッグ専用セクション
+        task_files = state.get("current_task", {}) or {}
+        all_files  = task_files.get("files_modified", [])
+        lines += [
+            "", "---", "", "## 🐛 デバッグ情報", "",
+            "**直近の変更ファイル:**",
+        ] + ([f"- `{fp}`" for fp in all_files] if all_files else ["- *なし*"]) + [
+            "",
+            "**未解決の問題 (issue-NNN形式):**",
+        ] + ([_fmt_issue(i) for i in issues if isinstance(i, dict) and not i.get("resolved")]
+             if issues else ["- *なし*"]) + [
+            "",
+            "**デバッグ優先事項:** 既知の問題から着手し、変更ファイルを重点的に確認してください。",
+        ]
+
     else:
-        lines += ["", "---", "", "## 重要な決定事項", "", "*なし*"]
+        # full（デフォルト）: 全セクション
+        lines += section("保留中のタスク",
+            [f"- [ ] <!-- USER INPUT -->{t['title']}<!-- /USER INPUT -->"
+             + (f" — <!-- USER INPUT -->{t['description']}<!-- /USER INPUT -->" if t.get("description") else "")
+             for t in state.get("pending_tasks", [])])
+        # 外部入力（ユーザーが記録した内容）はタグで囲んで信頼済み指示と区別する
+        lines += section("最近のメモ（最新10件）", _note_lines(notes, 10))
+        lines += _decisions_section(decisions)
+        lines += section("既知の問題・注意点", [_fmt_issue(i) for i in issues])
+        # issue-016: 完了タスクのタイトルもユーザー入力なのでタグでラップする
+        lines += section("完了済みタスク（最近5件）",
+            [f"- ✅ `{t['id']}` <!-- USER INPUT -->{t['title']}<!-- /USER INPUT --> ({t.get('completed_at', '?')[:10]})"
+             for t in state.get("completed_tasks", [])[-5:]])
+        lines += section("完了した保留タスク（最近5件）",
+            [f"- ✅ `{t['id']}` <!-- USER INPUT -->{t['title']}<!-- /USER INPUT --> ({t.get('completed_at', '?')[:10]})"
+             for t in state.get("completed_pending_tasks", [])[-5:]])
 
-    def _fmt_issue(iss) -> str:
-        if isinstance(iss, dict):
-            return f"- ⚠️ [{iss['id']}] <!-- USER INPUT -->{iss['text']}<!-- /USER INPUT -->"
-        return f"- ⚠️ <!-- USER INPUT -->{iss}<!-- /USER INPUT -->"
-
-    lines += section("既知の問題・注意点",
-        [_fmt_issue(i) for i in state.get("known_issues", [])])
-    # issue-016: 完了タスクのタイトルもユーザー入力なのでタグでラップする
-    lines += section("完了済みタスク（最近5件）",
-        [f"- ✅ `{t['id']}` <!-- USER INPUT -->{t['title']}<!-- /USER INPUT --> ({t.get('completed_at', '?')[:10]})"
-         for t in state.get("completed_tasks", [])[-5:]])
-    lines += section("完了した保留タスク（最近5件）",
-        [f"- ✅ `{t['id']}` <!-- USER INPUT -->{t['title']}<!-- /USER INPUT --> ({t.get('completed_at', '?')[:10]})"
-         for t in state.get("completed_pending_tasks", [])[-5:]])
-
+    # ── 共通フッタ（セッション開始手順） ────────────────────────────────
     lines += [
         "", "---", "", f"## {to_ai.upper()} セッション開始手順", "",
         "**1. プロジェクトを設定する（毎セッション必須）**",
@@ -1539,15 +1976,30 @@ def collab_search(query: str) -> str:
         if q in title.lower() or q in content.lower():
             results.append(f"[決定]   {d['timestamp'][:10]} {title}: {content[:100]}")
 
-    # 既知の問題
+    # 既知の問題（text + category + tags + related_files も検索対象）
     for iss in state.get("known_issues", []):
-        if isinstance(iss, dict) and q in iss.get("text", "").lower():
-            results.append(f"[問題]   [{iss['id']}] {iss['text']}")
+        if not isinstance(iss, dict):
+            continue
+        hit = (q in iss.get("text", "").lower()
+               or q in iss.get("category", "").lower()
+               or any(q in t.lower() for t in iss.get("tags", []))
+               or any(q in fp.lower() for fp in iss.get("related_files", [])))
+        if hit:
+            emoji = _SEVERITY_EMOJI.get(iss.get("severity", "P2"), "")
+            results.append(f"[問題]   {emoji}[{iss['id']}][{iss.get('severity','?')}] {iss['text']}")
 
-    # 解決済みの問題
+    # 解決済みの問題（同様に拡張フィールドも検索）
     for iss in state.get("resolved_issues", []):
-        if isinstance(iss, dict) and q in iss.get("text", "").lower():
-            results.append(f"[解決済] [{iss['id']}] {iss['text']}")
+        if not isinstance(iss, dict):
+            continue
+        hit = (q in iss.get("text", "").lower()
+               or q in iss.get("category", "").lower()
+               or any(q in t.lower() for t in iss.get("tags", []))
+               or any(q in fp.lower() for fp in iss.get("related_files", []))
+               or q in iss.get("resolution_note", "").lower())
+        if hit:
+            emoji = _SEVERITY_EMOJI.get(iss.get("severity", "P2"), "")
+            results.append(f"[解決済] {emoji}[{iss['id']}][{iss.get('severity','?')}] {iss['text']}")
 
     # 保留タスク
     for t in state.get("pending_tasks", []):
@@ -1802,6 +2254,347 @@ def collab_cleanup_sessions(keep_per_ai: int = 5) -> str:
         f"削除ファイル:\n" + "\n".join(f"  - {n}" for n in deleted)
     )
 
+
+@mcp.tool()
+def collab_cleanup_history(
+    keep_notes: int = 100,
+    keep_completed_tasks: int = 50,
+    archive: bool = True,
+    dry_run: bool = False,
+) -> str:
+    """
+    古いメモ・完了タスクを整理してAI_STATE.jsonをスリムにする。
+
+    넘치는 notes / completed_tasks を AI_STATE.archive.json にアーカイブし、
+    状態ファイルを指定件数以内に保つ。
+
+    Args:
+        keep_notes:           残すメモの最新件数（デフォルト: 100）
+        keep_completed_tasks: 残す完了タスクの最新件数（デフォルト: 50）
+        archive:              True = 削除分を AI_STATE.archive.json に退避、
+                              False = 単純削除
+        dry_run:              True = 実際には変更せず予測結果だけ返す
+    """
+    if keep_notes < 1 or keep_completed_tasks < 1:
+        return "エラー: keep_notes / keep_completed_tasks は 1 以上を指定してください。"
+
+    # dry_run: 変更せずに予測結果を返す
+    state = _load_state()
+    notes_total     = len(state.get("notes", []))
+    tasks_total     = len(state.get("completed_tasks", []))
+    notes_trim      = max(0, notes_total - keep_notes)
+    tasks_trim      = max(0, tasks_total - keep_completed_tasks)
+
+    if notes_trim == 0 and tasks_trim == 0:
+        return (
+            f"整理不要です。\n"
+            f"  メモ: {notes_total}件（上限 {keep_notes}件）\n"
+            f"  完了タスク: {tasks_total}件（上限 {keep_completed_tasks}件）"
+        )
+
+    if dry_run:
+        return (
+            f"[dry_run] 実行すると以下が整理されます:\n"
+            f"  メモ: {notes_total}件 → {notes_total - notes_trim}件残存（{notes_trim}件アーカイブ）\n"
+            f"  完了タスク: {tasks_total}件 → {tasks_total - tasks_trim}件残存（{tasks_trim}件アーカイブ）\n"
+            f"  アーカイブ先: {'AI_STATE.archive.json' if archive else '（単純削除）'}\n"
+            f"dry_run=False で実行してください。"
+        )
+
+    # アーカイブ対象を確定
+    archived_notes = state["notes"][:notes_trim]
+    archived_tasks = state["completed_tasks"][:tasks_trim]
+
+    if archive and (archived_notes or archived_tasks):
+        # AI_STATE.archive.json を読み込み（なければ新規）
+        af = _archive_file()
+        if af.exists():
+            try:
+                with open(af, "r", encoding="utf-8") as f:
+                    arc = json.load(f)
+            except Exception:
+                arc = {"notes": [], "completed_tasks": []}
+        else:
+            arc = {"notes": [], "completed_tasks": []}
+
+        arc.setdefault("notes", []).extend(archived_notes)
+        arc.setdefault("completed_tasks", []).extend(archived_tasks)
+        arc["last_archived"] = _now_iso()
+
+        # アーカイブファイルを原子的に書き込む
+        tmp_fd, tmp_path = tempfile.mkstemp(dir=_get_project_dir(), suffix=".tmp", prefix="arc_")
+        try:
+            with os.fdopen(tmp_fd, "w", encoding="utf-8") as f:
+                json.dump(arc, f, ensure_ascii=False, indent=2)
+            os.replace(tmp_path, af)
+        except Exception:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+            raise
+
+    # 状態を更新（古いレコードを削除）
+    with _state_transaction() as st:
+        st["notes"]           = st["notes"][notes_trim:]
+        st["completed_tasks"] = st["completed_tasks"][tasks_trim:]
+
+    archive_note = "AI_STATE.archive.json に退避" if archive else "単純削除"
+    return (
+        f"履歴を整理しました。\n"
+        f"  メモ: {notes_total}件 → {notes_total - notes_trim}件（{notes_trim}件を{archive_note}）\n"
+        f"  完了タスク: {tasks_total}件 → {tasks_total - tasks_trim}件（{tasks_trim}件を{archive_note}）"
+    )
+
+
+@mcp.tool()
+def collab_export_state(
+    output_path: str = "",
+    include_sessions: bool = False,
+    redact_cli_config: bool = True,
+) -> str:
+    """
+    現在の状態をJSONファイルとしてエクスポートする。
+
+    SHA-256チェックサム付きのバックアップファイルを生成する。
+    collab_import_state() で復元・マージが可能。
+
+    Args:
+        output_path:       出力先ファイルパス。省略時はプロジェクトフォルダに
+                           AI_STATE_backup_YYYYMMDD_HHMMSS.json を生成
+        include_sessions:  True = ai_sessions/ の内容も含める
+        redact_cli_config: True = cli_config.json（APIキー等含む可能性）は含めない（デフォルト）
+    """
+    state = _load_state()
+    proj_dir = _get_project_dir()
+
+    # 出力パスを決定する
+    if output_path:
+        out = Path(output_path)
+        if not out.is_absolute():
+            return "エラー: output_path は絶対パスを指定してください。"
+    else:
+        ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        out = proj_dir / f"AI_STATE_backup_{ts}.json"
+
+    # エクスポート用ペイロードを組み立てる
+    payload: dict = {
+        "export_version":  "1.0",
+        "exported_at":     _now_iso(),
+        "source_project":  str(proj_dir),
+        "state":           state,
+    }
+
+    if include_sessions:
+        sd = _sessions_dir()
+        session_data: dict[str, str] = {}
+        if sd.exists():
+            for log_file in sorted(sd.glob("*.md")):
+                try:
+                    session_data[log_file.name] = log_file.read_text(encoding="utf-8")
+                except OSError:
+                    session_data[log_file.name] = "（読み込み失敗）"
+        payload["sessions"] = session_data
+
+    if not redact_cli_config:
+        cfg_file = proj_dir / "cli_config.json"
+        if cfg_file.exists():
+            try:
+                with open(cfg_file, "r", encoding="utf-8") as f:
+                    payload["cli_config"] = json.load(f)
+            except Exception:
+                payload["cli_config"] = None
+
+    # SHA-256チェックサムを計算する（checksum フィールド自体は除外して計算）
+    payload_json = json.dumps(payload, ensure_ascii=False, sort_keys=True)
+    checksum = hashlib.sha256(payload_json.encode("utf-8")).hexdigest()
+    payload["checksum"] = checksum
+
+    # ファイルに書き込む
+    try:
+        out.parent.mkdir(parents=True, exist_ok=True)
+        _write_atomic(out, json.dumps(payload, ensure_ascii=False, indent=2))
+    except OSError as e:
+        return f"エラー: ファイルの書き込みに失敗しました: {e}"
+
+    return (
+        f"状態をエクスポートしました。\n"
+        f"  出力ファイル: {out}\n"
+        f"  SHA-256: {checksum[:16]}...\n"
+        f"  メモ: {len(state.get('notes', []))}件  "
+        f"決定事項: {len(state.get('key_decisions', []))}件  "
+        f"問題: {len(state.get('known_issues', []))}件\n"
+        f"復元: collab_import_state('{out}')"
+    )
+
+
+@mcp.tool()
+def collab_import_state(
+    input_path: str,
+    mode: str = "validate",
+    backup: bool = True,
+) -> str:
+    """
+    collab_export_state() で生成したバックアップから状態をインポートする。
+
+    モード:
+    - validate : チェックサムと内容を検証するだけ（変更なし）
+    - merge    : エクスポート内のメモ・決定事項・問題を現在の状態に追記する
+    - replace  : 現在の状態をエクスポートの内容で完全置換する
+
+    Args:
+        input_path: エクスポートファイルのフルパス
+        mode:       "validate" / "merge" / "replace"（デフォルト: validate）
+        backup:     True = replace 実行前に現在の状態を自動バックアップ（デフォルト: True）
+    """
+    if mode not in ("validate", "merge", "replace"):
+        return "エラー: mode は 'validate' / 'merge' / 'replace' のいずれかを指定してください。"
+
+    in_path = Path(input_path)
+    if not in_path.is_absolute():
+        return "エラー: input_path は絶対パスを指定してください。"
+    if not in_path.exists():
+        return f"エラー: ファイルが見つかりません: {in_path}"
+
+    # ファイルを読み込む
+    try:
+        with open(in_path, "r", encoding="utf-8") as f:
+            payload = json.load(f)
+    except Exception as e:
+        return f"エラー: ファイルの読み込みに失敗しました: {e}"
+
+    # チェックサム検証
+    stored_checksum = payload.pop("checksum", None)
+    if stored_checksum is None:
+        return "エラー: チェックサムが見つかりません。このファイルはエクスポートされたものではない可能性があります。"
+
+    payload_json     = json.dumps(payload, ensure_ascii=False, sort_keys=True)
+    calc_checksum    = hashlib.sha256(payload_json.encode("utf-8")).hexdigest()
+    payload["checksum"] = stored_checksum  # 元に戻す（表示用）
+
+    if calc_checksum != stored_checksum:
+        return (
+            f"エラー: チェックサムが一致しません。ファイルが破損または改ざんされています。\n"
+            f"  格納値: {stored_checksum[:16]}...\n"
+            f"  計算値: {calc_checksum[:16]}..."
+        )
+
+    imported_state = payload.get("state", {})
+    exported_at    = payload.get("exported_at", "不明")
+    source_project = payload.get("source_project", "不明")
+
+    # ── validate モード ─────────────────────────────────────────────────
+    if mode == "validate":
+        notes_count    = len(imported_state.get("notes", []))
+        dec_count      = len(imported_state.get("key_decisions", []))
+        issue_count    = len(imported_state.get("known_issues", []))
+        task_count     = len(imported_state.get("completed_tasks", []))
+        return (
+            f"チェックサム検証: OK ✅\n"
+            f"  エクスポート日時: {exported_at}\n"
+            f"  ソースプロジェクト: {source_project}\n"
+            f"  メモ: {notes_count}件  決定事項: {dec_count}件  "
+            f"問題: {issue_count}件  完了タスク: {task_count}件\n"
+            f"インポートするには mode='merge' または mode='replace' を指定してください。"
+        )
+
+    # ── merge / replace モード ──────────────────────────────────────────
+    if mode == "replace" and backup:
+        # 現在の状態を replace 前にバックアップ
+        ts  = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        bak = _get_project_dir() / f"AI_STATE_before_import_{ts}.json"
+        try:
+            current_state = _load_state()
+            _write_atomic(bak, json.dumps(current_state, ensure_ascii=False, indent=2))
+        except Exception as e:
+            return f"エラー: バックアップの作成に失敗しました: {e}"
+
+    merged_notes    = 0
+    merged_decs     = 0
+    merged_issues   = 0
+
+    with _state_transaction() as st:
+        if mode == "replace":
+            # 完全置換: インポート状態をそのまま使用する
+            for key, val in imported_state.items():
+                st[key] = val
+        else:
+            # merge: メモ・決定事項・既知の問題を追記する（重複は timestamp で簡易判定）
+            existing_note_ts   = {n.get("timestamp") for n in st.get("notes", [])}
+            existing_dec_ts    = {d.get("timestamp") for d in st.get("key_decisions", [])}
+            existing_issue_ids = {i.get("id") if isinstance(i, dict) else None
+                                  for i in st.get("known_issues", [])}
+
+            for note in imported_state.get("notes", []):
+                if note.get("timestamp") not in existing_note_ts:
+                    st["notes"].append(note)
+                    merged_notes += 1
+
+            for dec in imported_state.get("key_decisions", []):
+                if dec.get("timestamp") not in existing_dec_ts:
+                    st["key_decisions"].append(dec)
+                    merged_decs += 1
+
+            for issue in imported_state.get("known_issues", []):
+                issue_id = issue.get("id") if isinstance(issue, dict) else None
+                if issue_id not in existing_issue_ids:
+                    st["known_issues"].append(issue)
+                    merged_issues += 1
+
+    if mode == "replace":
+        backup_note = f"（バックアップ: {bak.name}）" if backup else ""
+        return (
+            f"状態を完全置換しました。{backup_note}\n"
+            f"  エクスポート日時: {exported_at}\n"
+            f"  ソースプロジェクト: {source_project}"
+        )
+    else:
+        return (
+            f"状態をマージしました。\n"
+            f"  追加メモ: {merged_notes}件  "
+            f"追加決定事項: {merged_decs}件  "
+            f"追加問題: {merged_issues}件\n"
+            f"  エクスポート日時: {exported_at}"
+        )
+
+
+@mcp.tool()
+def collab_set_handoff_template(preset: str = "full") -> str:
+    """
+    HANDOFF.md の生成テンプレートを切り替える。
+
+    プリセット:
+    - full    : 全セクション（デフォルト）
+    - minimal : 現在タスク＋最新メモ3件＋既知の問題のみ（高速ハンドオフ向け）
+    - review  : full ＋ レビューポイントセクション（コードレビュー引き継ぎ向け）
+    - debug   : full ＋ デバッグ情報セクション（障害対応引き継ぎ向け）
+
+    Args:
+        preset: "full" / "minimal" / "review" / "debug"（デフォルト: "full"）
+    """
+    if preset not in VALID_HANDOFF_TEMPLATES:
+        return (
+            f"エラー: preset は {VALID_HANDOFF_TEMPLATES} のいずれかを指定してください。\n"
+            f"指定値: '{preset}'"
+        )
+
+    with _state_transaction() as state:
+        old_preset = state.get("handoff_template", "full")
+        state["handoff_template"] = preset
+
+    preset_desc = {
+        "full":    "全セクション（デフォルト）",
+        "minimal": "現在タスク＋最新3件＋既知の問題のみ",
+        "review":  "full＋レビューポイントセクション",
+        "debug":   "full＋デバッグ情報セクション",
+    }
+    return (
+        f"ハンドオフテンプレートを変更しました。\n"
+        f"  {old_preset} → {preset}\n"
+        f"  内容: {preset_desc.get(preset, preset)}\n"
+        f"次回の collab_generate_handoff() / collab_checkpoint() から反映されます。"
+    )
+
 #endregion
 
 #region エントリポイント
@@ -1840,7 +2633,7 @@ def _print_help(version_only: bool = False) -> None:
 
 
 
-_VERSION = "1.0.11"
+_VERSION = "1.0.14"
 
 # ヘルプテキスト（AIが読むことを想定して日本語で詳述）
 _HELP_TEXT = f"""\
@@ -1883,6 +2676,11 @@ MCPツール一覧（Claude Desktop / Codex Desktop から自動呼び出し）:
   collab_doctor             MCPサーバーと実行環境の健全性を診断する
   collab_timeline           プロジェクトの更新イベントを時系列で返す
   collab_cleanup_sessions   古いセッションログを削除する
+  collab_cleanup_history    古いメモ・完了タスクを整理してアーカイブする
+  collab_update_issue       既存issueのseverity/category/tags/related_files/statusを更新する
+  collab_export_state       現在の状態をSHA-256チェックサム付きJSONでエクスポートする
+  collab_import_state       エクスポートしたJSONから状態をインポートする
+  collab_set_handoff_template  HANDOFF.md の生成テンプレートを切り替える
 
 プロジェクトの切り替え:
   Desktop アプリを再起動しなくても collab_switch_project() を呼ぶだけで
