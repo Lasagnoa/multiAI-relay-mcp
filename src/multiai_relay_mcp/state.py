@@ -5,12 +5,15 @@ import datetime
 import json
 import os
 import re
+import subprocess
 import sys
 import tempfile
 import time
 from contextlib import contextmanager
 from contextvars import ContextVar
 from pathlib import Path
+
+from .i18n import t
 
 #region 定数・プロジェクト解決
 
@@ -92,19 +95,14 @@ VALID_HANDOFF_TEMPLATES = ["full", "minimal", "review", "debug"]
 
 #region プロジェクトディレクトリ解決
 
-def _validate_project_dir(p: Path, label: str = "プロジェクトパス") -> Path:
+def _validate_project_dir(p: Path, label: str = "") -> Path:
     """パスが存在するディレクトリかどうかを検証して返す。失敗時は RuntimeError。"""
+    if not label:
+        label = t("label.project_path")
     if not p.exists():
-        raise RuntimeError(
-            f"{label}が見つかりません: {p}\n"
-            "ディレクトリが削除・移動された可能性があります。\n"
-            "collab_switch_project() で正しいパスを再設定してください。"
-        )
+        raise RuntimeError(t("validate.path_not_found", label=label, path=p))
     if not p.is_dir():
-        raise RuntimeError(
-            f"{label}がディレクトリではありません: {p}\n"
-            "collab_switch_project() で正しいパスを再設定してください。"
-        )
+        raise RuntimeError(t("validate.path_not_dir", label=label, path=p))
     return p
 
 
@@ -121,11 +119,11 @@ def _get_project_dir() -> Path:
     # 1. ContextVar override
     override = _project_override.get()
     if override is not None:
-        return _validate_project_dir(override, "指定されたプロジェクトパス")
+        return _validate_project_dir(override, t("label.project_path"))
 
     # 2. _current_project
     if _current_project is not None:
-        return _validate_project_dir(_current_project, "プロジェクトディレクトリ")
+        return _validate_project_dir(_current_project, t("label.project_dir"))
 
     # 3. cwd 探索（AI_STATE.json が cwd または祖先に存在する場合のみ採用）
     candidate = Path.cwd()
@@ -137,10 +135,7 @@ def _get_project_dir() -> Path:
             break
         candidate = parent
 
-    raise RuntimeError(
-        "現在のプロジェクトが設定されていません。\n"
-        "collab_switch_project('プロジェクトのフルパス') を呼び出してください。"
-    )
+    raise RuntimeError(t("project.not_set"))
 
 def _state_file()   -> Path: return _get_project_dir() / "AI_STATE.json"
 def _handoff_file() -> Path: return _get_project_dir() / "HANDOFF.md"
@@ -157,53 +152,53 @@ _INJECTION_TAG = "<!-- /USER INPUT -->"
 def _validate_tags(tags: list, field: str = "tags") -> str | None:
     """タグリストの件数・文字数・文字種を検証する。問題があればエラーメッセージを返す。"""
     if not isinstance(tags, list):
-        return f"エラー: {field} はリストで指定してください。"
+        return t("validate.tags.not_list", field=field)
     if len(tags) > _MAX_TAGS:
-        return f"エラー: {field} は最大{_MAX_TAGS}件です（現在{len(tags)}件）。"
+        return t("validate.tags.too_many", field=field, max=_MAX_TAGS, count=len(tags))
     for tag in tags:
         if not isinstance(tag, str):
-            return f"エラー: {field} の各要素は文字列である必要があります。"
+            return t("validate.tags.elem_not_str", field=field)
         if not tag:
-            return f"エラー: {field} に空のタグは指定できません。"
+            return t("validate.tags.empty", field=field)
         if len(tag) > _MAX_TAG_LEN:
-            return f"エラー: {field} の各タグは最大{_MAX_TAG_LEN}文字です: {tag!r}"
+            return t("validate.tags.too_long", field=field, max=_MAX_TAG_LEN, tag=tag)
         if not _SLUG_RE.match(tag):
-            return (f"エラー: {field} はアルファベット・数字・ハイフン・アンダースコアのみ使用できます: {tag!r}")
+            return t("validate.tags.invalid_chars", field=field, tag=tag)
     return None
 
 
 def _validate_related_files(files: list) -> str | None:
     """related_files リストのパス安全性を検証する。問題があればエラーメッセージを返す。"""
     if not isinstance(files, list):
-        return "エラー: related_files はリストで指定してください。"
+        return t("validate.files.not_list")
     if len(files) > _MAX_RELATED_FILES:
-        return f"エラー: related_files は最大{_MAX_RELATED_FILES}件です（現在{len(files)}件）。"
+        return t("validate.files.too_many", max=_MAX_RELATED_FILES, count=len(files))
     for fp in files:
         if not isinstance(fp, str):
-            return "エラー: related_files の各要素は文字列である必要があります。"
+            return t("validate.files.elem_not_str")
         if not fp:
-            return "エラー: related_files に空のパスは指定できません。"
+            return t("validate.files.empty")
         if len(fp) > _MAX_INPUT_LEN:
-            return f"エラー: ファイルパスが長すぎます（最大{_MAX_INPUT_LEN}文字）。"
+            return t("validate.files.too_long", max=_MAX_INPUT_LEN)
         if any(c in fp for c in ('\n', '\r', '\t', '\0')):
-            return f"エラー: ファイルパスに制御文字を含めることはできません: {fp!r}"
+            return t("validate.files.control_chars", fp=fp)
         norm = fp.replace('\\', '/')
         if any(part == '..' for part in norm.split('/')):
-            return f"エラー: ファイルパスに「..」を含めることはできません: {fp!r}"
+            return t("validate.files.dotdot", fp=fp)
         if Path(fp).is_absolute():
-            return f"エラー: related_files には相対パスを指定してください（絶対パス不可）: {fp!r}"
+            return t("validate.files.absolute", fp=fp)
     return None
 
 
-def _validate_input(text: str, field: str = "入力", max_len: int = _MAX_INPUT_LEN) -> str | None:
+def _validate_input(text: str, field: str = "input", max_len: int = _MAX_INPUT_LEN) -> str | None:
     """
     入力文字列の長さとインジェクションタグを検証する。
     問題があればエラーメッセージを返し、問題なければ None を返す。
     """
     if len(text) > max_len:
-        return f"エラー: {field}が長すぎます（最大{max_len}文字、現在{len(text)}文字）。"
+        return t("validate.input.too_long", field=field, max=max_len, count=len(text))
     if _INJECTION_TAG in text:
-        return f"エラー: {field}に使用できない文字列が含まれています。"
+        return t("validate.input.injection", field=field)
     return None
 
 
@@ -239,10 +234,7 @@ def _load_state() -> dict:
     """状態ファイルを読み込む（旧フォーマットの自動マイグレーションを含む）"""
     sf = _state_file()
     if not sf.exists():
-        raise RuntimeError(
-            f"AI_STATE.json が見つかりません: {sf}\n"
-            "collab_switch_project(path, project_name='プロジェクト名') を呼び出して初期化してください。"
-        )
+        raise RuntimeError(t("load_state.not_found", sf=sf))
     # issue-022: BOM付きJSON(utf-8-sig)も透過的に読み込む
     with open(sf, "r", encoding="utf-8-sig") as f:
         state = json.load(f)
@@ -587,6 +579,110 @@ def _create_session_log(ai_name: str, session_number: int, mode: str) -> None:
     _write_atomic(sd / f"{ts}_{ai_name}.md", content)
 
 #endregion
+
+#region Git 連携ユーティリティ
+
+def get_git_info(project_dir: Path) -> dict | None:
+    """
+    プロジェクトディレクトリの git 情報を取得する。
+
+    git がインストールされていない・git リポジトリでない場合は None を返す。
+
+    Returns:
+        {
+          "branch":  "main",
+          "commits": ["abc1234 feat: add feature", ...],  # 最新5件
+          "is_dirty": True,  # 未コミット変更あり
+        }
+        取得失敗時は None
+    """
+    try:
+        base = ["git", "-C", str(project_dir)]
+
+        # ブランチ名
+        branch_result = subprocess.run(
+            base + ["rev-parse", "--abbrev-ref", "HEAD"],
+            capture_output=True, text=True, timeout=5,
+            encoding="utf-8", errors="replace",
+        )
+        if branch_result.returncode != 0:
+            return None  # git リポジトリでない
+        branch = branch_result.stdout.strip()
+
+        # 最新5件のコミット（短いハッシュ + 件名）
+        log_result = subprocess.run(
+            base + ["log", "--oneline", "-5"],
+            capture_output=True, text=True, timeout=5,
+            encoding="utf-8", errors="replace",
+        )
+        commits = [line for line in log_result.stdout.splitlines() if line.strip()]
+
+        # 未コミット変更の有無
+        status_result = subprocess.run(
+            base + ["status", "--porcelain"],
+            capture_output=True, text=True, timeout=5,
+            encoding="utf-8", errors="replace",
+        )
+        is_dirty = bool(status_result.stdout.strip())
+
+        return {"branch": branch, "commits": commits, "is_dirty": is_dirty}
+    except Exception:
+        return None
+
+#endregion
+
+
+#region プロジェクトレジストリ（最近使ったプロジェクトの一覧）
+
+# レジストリファイルのパス（ホームディレクトリ直下の隠しファイル）
+_REGISTRY_FILE = Path.home() / ".multiai_projects.json"
+# レジストリに保持する最大件数
+_REGISTRY_MAX = 20
+
+
+def _load_registry() -> list[dict]:
+    """プロジェクトレジストリを読み込む。ファイルがなければ空リストを返す。"""
+    try:
+        if _REGISTRY_FILE.exists():
+            with open(_REGISTRY_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            return data if isinstance(data, list) else []
+    except Exception:
+        pass
+    return []
+
+
+def _save_registry(entries: list[dict]) -> None:
+    """プロジェクトレジストリをアトミックに書き込む。失敗時は無視する。"""
+    try:
+        tmp_fd, tmp_path = tempfile.mkstemp(
+            dir=_REGISTRY_FILE.parent, suffix=".tmp", prefix=".multiai_projects_"
+        )
+        with os.fdopen(tmp_fd, "w", encoding="utf-8") as f:
+            json.dump(entries, f, ensure_ascii=False, indent=2)
+        os.replace(tmp_path, _REGISTRY_FILE)
+    except Exception:
+        pass
+
+
+def register_project(path: Path, project_name: str) -> None:
+    """
+    プロジェクトパスをレジストリに登録・更新する。
+    同じパスが既にあれば last_used を更新して先頭に移動する。
+    """
+    entries = _load_registry()
+    path_str = str(path)
+    # 既存エントリを除去して先頭に再挿入（最近使った順）
+    entries = [e for e in entries if e.get("path") != path_str]
+    entries.insert(0, {
+        "path":         path_str,
+        "project_name": project_name,
+        "last_used":    _now_iso(),
+    })
+    _save_registry(entries[:_REGISTRY_MAX])
+
+#endregion
+
 
 def set_current_project(path: Path | None) -> None:
     """Set the process-local active project path."""

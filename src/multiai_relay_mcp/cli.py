@@ -6,11 +6,11 @@ import shutil
 import subprocess
 from pathlib import Path
 
+from .i18n import t
 from .state import (
     DEFAULT_CLI_CONFIG,
     _get_project_dir,
     _load_state,
-    get_current_project_raw,
 )
 
 #region CLI呼び出しユーティリティ
@@ -57,21 +57,21 @@ def _call_ai_cli(ai: str, prompt: str, timeout: int = 180) -> str:
     config = _load_cli_config()
     cfg = config.get(ai)
     if not cfg:
-        return f"エラー: '{ai}' のCLI設定がありません。"
+        return t("cli.no_config", ai=ai)
 
     cli_path = _resolve_cli_path(ai, cfg["command"])
     if not cli_path:
-        return (
-            f"エラー: {ai.upper()} CLI が見つかりません。\n"
-            f"・'{cfg['command']}' が PATH に存在するか確認してください。\n"
-            f"・または collab_setup_cli() で設定してください。"
-        )
+        return t("cli.not_found", AI=ai.upper(), cmd=cfg["command"])
 
     cmd = [cli_path] + cfg.get("args_before", []) + [prompt] + cfg.get("args_after", [])
 
     # プロジェクトディレクトリをCWDに設定する（Codex はgitリポジトリ内での実行が必要）
-    current_project = get_current_project_raw()
-    cwd = str(current_project) if current_project and current_project.exists() else None
+    # ContextVar override を優先する（project_path 指定時も正しいCWDで実行するため）
+    try:
+        effective_project = _get_project_dir()
+        cwd = str(effective_project) if effective_project.exists() else None
+    except RuntimeError:
+        cwd = None
 
     # CLIが標準出力に出力するノイズ行（stdin確認メッセージなど）
     _NOISE_LINES: set[str] = {
@@ -93,36 +93,36 @@ def _call_ai_cli(ai: str, prompt: str, timeout: int = 180) -> str:
         response = "\n".join(cleaned_lines).strip() or result.stderr.strip()
         if not response:
             # 応答が空の場合は対話TUIが起動した可能性がある
-            return (
-                f"（{ai.upper()} CLI から応答がありませんでした）\n"
-                f"Codex CLI が対話モードで起動している可能性があります。\n"
-                f"collab_setup_cli('{ai}', ...) で非対話引数を設定してください。"
-            )
+            return t("cli.no_response", AI=ai.upper(), ai=ai)
         return response
     except subprocess.TimeoutExpired:
-        return f"エラー: {ai.upper()} CLI が {timeout}秒 以内に応答しませんでした。"
+        return t("cli.timeout", AI=ai.upper(), timeout=timeout)
     except FileNotFoundError:
-        return f"エラー: 実行ファイルが見つかりません: {cli_path}"
+        return t("cli.exec_not_found", path=cli_path)
     except Exception as e:
-        return f"エラー: {ai.upper()} CLI 呼び出し中に問題が発生しました: {e}"
+        return t("cli.exception", AI=ai.upper(), err=e)
 
 
 def _build_consult_prompt(question: str) -> str:
     """現在のプロジェクト文脈を付加した相談プロンプトを生成する"""
     try:
         state = _load_state()
-        task_title = state["current_task"]["title"] if state.get("current_task") else "未設定"
+        task_title = (
+            state["current_task"]["title"]
+            if state.get("current_task")
+            else t("consult.task_none")
+        )
         lines = [
-            "[AI協働開発システムからの相談]",
-            f"プロジェクト : {state['project_name']}",
-            f"現在のタスク : {task_title}",
-            f"相談元の AI  : {state['current_ai'].upper()}",
+            t("consult.header"),
+            t("consult.project", name=state["project_name"]),
+            t("consult.task", title=task_title),
+            t("consult.from_ai", ai=state["current_ai"].upper()),
         ]
         if state.get("key_decisions"):
-            lines += ["", "## 既存の設計決定事項（参考）"]
+            lines += ["", t("consult.decisions")]
             for dec in state["key_decisions"][-3:]:
                 lines.append(f"- {dec['title']}: {dec['content'][:200]}")
-        lines += ["", "---", "", f"## 相談内容\n{question}"]
+        lines += ["", "---", "", t("consult.question", question=question)]
         return "\n".join(lines)
     except Exception:
         return question

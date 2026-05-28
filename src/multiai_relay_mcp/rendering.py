@@ -2,8 +2,8 @@
 
 import re
 
+from .i18n import mode_label, t
 from .state import (
-    MODE_LABELS,
     VALID_SEVERITIES,
     _SEVERITY_EMOJI,
     _get_project_dir,
@@ -21,38 +21,43 @@ def _build_handoff(state: dict, from_ai: str, to_ai: str) -> str:
     - review  : full ＋ レビューポイントセクション
     - debug   : full ＋ デバッグ情報セクション
     """
-    template = state.get("handoff_template", "full")
-    mode_label = MODE_LABELS.get(state["mode"], state["mode"])
+    template    = state.get("handoff_template", "full")
+    cur_mode    = mode_label(state["mode"])
 
     # ── 共通ヘッダ ──────────────────────────────────────────────────────
     lines = [
-        "# AI協働開発 ハンドオフドキュメント", "",
-        f"> **引き継ぎ元:** {from_ai.upper()}　→　**引き継ぎ先:** {to_ai.upper()}",
-        f"> **日時:** {_now_display()}　｜　**プロジェクト:** {state['project_name']}",
-        f"> **モード:** {mode_label}　｜　**セッション:** #{state['session_count']}",
-        f"> **テンプレート:** {template}",
-        "", "---", "", "## 現在のタスク", "",
+        t("handoff.title"), "",
+        t("handoff.from_to",       from_ai=from_ai.upper(), to_ai=to_ai.upper()),
+        t("handoff.datetime_proj", dt=_now_display(), project=state["project_name"]),
+        t("handoff.mode_session",  mode=cur_mode, session=state["session_count"]),
+        t("handoff.template_line", template=template),
+        "", "---", "", t("handoff.sec_current_task"), "",
     ]
 
     if state.get("current_task"):
         task = state["current_task"]
         # issue-009: タスクタイトル/詳細もユーザー入力なのでタグでラップする
-        lines += [f"**タスクID:** `{task['id']}`",
-                  f"**タイトル:** <!-- USER INPUT -->{task['title']}<!-- /USER INPUT -->"]
+        lines += [
+            t("handoff.task_id",    id=task["id"]),
+            t("handoff.task_title", title=task["title"]),
+        ]
         if task.get("description"):
-            lines.append(f"**詳細:** <!-- USER INPUT -->{task['description']}<!-- /USER INPUT -->")
-        lines.append(f"**開始:** {task['started_at'][:16]}  担当: {task.get('started_by', '?').upper()}")
+            lines.append(t("handoff.task_desc", desc=task["description"]))
+        lines.append(t("handoff.task_started",
+                       ts=task["started_at"][:16], ai=task.get("started_by", "?").upper()))
         if task.get("files_modified"):
             # issue-016: files_modified もユーザー入力なのでタグでラップする
-            lines += ["", "**変更済みファイル:**"] + [
+            lines += ["", t("handoff.task_files")] + [
                 f"- <!-- USER INPUT -->`{fp}`<!-- /USER INPUT -->" for fp in task["files_modified"]
             ]
     else:
-        lines.append("*タスクは設定されていません。*")
+        lines.append(t("handoff.task_none"))
 
     # ── セクション構築ヘルパー ──────────────────────────────────────────
-    def section(title, items, empty="*なし*"):
-        return ["", "---", "", f"## {title}", ""] + (items if items else [empty])
+    _empty = t("handoff.empty_item")
+
+    def section(title, items, empty=None):
+        return ["", "---", "", f"## {title}", ""] + (items if items else [empty or _empty])
 
     def _fmt_issue(iss) -> str:
         if isinstance(iss, dict):
@@ -69,7 +74,7 @@ def _build_handoff(state: dict, from_ai: str, to_ai: str) -> str:
     def _note_lines(notes, limit: int) -> list[str]:
         nl = []
         if len(notes) > limit:
-            nl.append(f"- *過去{len(notes) - limit}件のメモを省略*")
+            nl.append(t("handoff.notes_omitted", n=len(notes) - limit))
         nl += [
             f"- `{n['timestamp'][:16]}` ({n['ai'].upper()}) <!-- USER INPUT -->{n['text']}<!-- /USER INPUT -->"
             for n in notes[-limit:]
@@ -77,11 +82,12 @@ def _build_handoff(state: dict, from_ai: str, to_ai: str) -> str:
         return nl
 
     def _decisions_section(decisions, limit: int = 10) -> list[str]:
+        sec_title = t("handoff.sec_decisions")
         if not decisions:
-            return ["", "---", "", "## 重要な決定事項", "", "*なし*"]
-        out = ["", "---", "", "## 重要な決定事項", ""]
+            return ["", "---", "", f"## {sec_title}", "", _empty]
+        out = ["", "---", "", f"## {sec_title}", ""]
         if len(decisions) > limit:
-            out.append(f"*過去{len(decisions) - limit}件の決定事項を省略*")
+            out.append(t("handoff.decisions_omitted", n=len(decisions) - limit))
             out.append("")
         for dec in decisions[-limit:]:
             out += [
@@ -105,95 +111,96 @@ def _build_handoff(state: dict, from_ai: str, to_ai: str) -> str:
         if isinstance(i, dict) and i.get("severity") in VALID_SEVERITIES else 99
     )
 
+    # ── 共通ヘルパー：pending_tasks をフォーマット ─────────────────────
+    def _pending_items() -> list[str]:
+        return [
+            f"- [ ] <!-- USER INPUT -->{pt['title']}<!-- /USER INPUT -->"
+            + (f" — <!-- USER INPUT -->{pt['description']}<!-- /USER INPUT -->"
+               if pt.get("description") else "")
+            for pt in state.get("pending_tasks", [])
+        ]
+
+    def _done_task_items(lst) -> list[str]:
+        return [
+            f"- ✅ `{tt['id']}` <!-- USER INPUT -->{tt['title']}<!-- /USER INPUT -->"
+            f" ({tt.get('completed_at', '?')[:10]})"
+            for tt in lst
+        ]
+
     if template == "minimal":
         # 現在タスク（ヘッダ済み）＋ 最新メモ3件 ＋ 既知の問題のみ
-        lines += section("最近のメモ（最新3件）", _note_lines(notes, 3))
-        lines += section("既知の問題・注意点", [_fmt_issue(i) for i in issues])
+        lines += section(t("handoff.sec_notes", n=3), _note_lines(notes, 3))
+        lines += section(t("handoff.sec_issues"), [_fmt_issue(i) for i in issues])
 
     elif template == "review":
         # full ＋ レビューポイントセクション
-        lines += section("保留中のタスク",
-            [f"- [ ] <!-- USER INPUT -->{t['title']}<!-- /USER INPUT -->"
-             + (f" — <!-- USER INPUT -->{t['description']}<!-- /USER INPUT -->" if t.get("description") else "")
-             for t in state.get("pending_tasks", [])])
-        lines += section("最近のメモ（最新10件）", _note_lines(notes, 10))
+        lines += section(t("handoff.sec_pending"), _pending_items())
+        lines += section(t("handoff.sec_notes", n=10), _note_lines(notes, 10))
         lines += _decisions_section(decisions)
-        lines += section("既知の問題・注意点", [_fmt_issue(i) for i in issues])
-        lines += section("完了済みタスク（最近5件）",
-            [f"- ✅ `{t['id']}` <!-- USER INPUT -->{t['title']}<!-- /USER INPUT --> ({t.get('completed_at', '?')[:10]})"
-             for t in state.get("completed_tasks", [])[-5:]])
-        lines += section("完了した保留タスク（最近5件）",
-            [f"- ✅ `{t['id']}` <!-- USER INPUT -->{t['title']}<!-- /USER INPUT --> ({t.get('completed_at', '?')[:10]})"
-             for t in state.get("completed_pending_tasks", [])[-5:]])
+        lines += section(t("handoff.sec_issues"), [_fmt_issue(i) for i in issues])
+        lines += section(t("handoff.sec_done_tasks"),
+                         _done_task_items(state.get("completed_tasks", [])[-5:]))
+        lines += section(t("handoff.sec_done_pending"),
+                         _done_task_items(state.get("completed_pending_tasks", [])[-5:]))
         # レビュー専用セクション
         lines += [
-            "", "---", "", "## 📋 レビューポイント", "",
-            "以下の観点でレビューしてください:",
-            "- 実装が決定事項と一致しているか",
-            "- 既知の問題が解決されているか",
-            "- コードの品質・セキュリティ・パフォーマンス",
-            "- 次のフェーズに進む前に確認すべき点",
+            "", "---", "", t("handoff.sec_review"), "",
+            t("handoff.review_intro"),
+            t("handoff.review_1"),
+            t("handoff.review_2"),
+            t("handoff.review_3"),
+            t("handoff.review_4"),
         ]
 
     elif template == "debug":
         # full ＋ デバッグ情報セクション
-        lines += section("保留中のタスク",
-            [f"- [ ] <!-- USER INPUT -->{t['title']}<!-- /USER INPUT -->"
-             + (f" — <!-- USER INPUT -->{t['description']}<!-- /USER INPUT -->" if t.get("description") else "")
-             for t in state.get("pending_tasks", [])])
-        lines += section("最近のメモ（最新10件）", _note_lines(notes, 10))
+        lines += section(t("handoff.sec_pending"), _pending_items())
+        lines += section(t("handoff.sec_notes", n=10), _note_lines(notes, 10))
         lines += _decisions_section(decisions)
-        lines += section("既知の問題・注意点", [_fmt_issue(i) for i in issues])
-        lines += section("完了済みタスク（最近5件）",
-            [f"- ✅ `{t['id']}` <!-- USER INPUT -->{t['title']}<!-- /USER INPUT --> ({t.get('completed_at', '?')[:10]})"
-             for t in state.get("completed_tasks", [])[-5:]])
-        lines += section("完了した保留タスク（最近5件）",
-            [f"- ✅ `{t['id']}` <!-- USER INPUT -->{t['title']}<!-- /USER INPUT --> ({t.get('completed_at', '?')[:10]})"
-             for t in state.get("completed_pending_tasks", [])[-5:]])
+        lines += section(t("handoff.sec_issues"), [_fmt_issue(i) for i in issues])
+        lines += section(t("handoff.sec_done_tasks"),
+                         _done_task_items(state.get("completed_tasks", [])[-5:]))
+        lines += section(t("handoff.sec_done_pending"),
+                         _done_task_items(state.get("completed_pending_tasks", [])[-5:]))
         # デバッグ専用セクション
         task_files = state.get("current_task", {}) or {}
         all_files  = task_files.get("files_modified", [])
         lines += [
-            "", "---", "", "## 🐛 デバッグ情報", "",
-            "**直近の変更ファイル:**",
-        ] + ([f"- `{fp}`" for fp in all_files] if all_files else ["- *なし*"]) + [
+            "", "---", "", t("handoff.sec_debug"), "",
+            t("handoff.debug_files"),
+        ] + ([f"- `{fp}`" for fp in all_files] if all_files else [f"- {_empty}"]) + [
             "",
-            "**未解決の問題 (issue-NNN形式):**",
+            t("handoff.debug_issues"),
         ] + ([_fmt_issue(i) for i in issues if isinstance(i, dict) and not i.get("resolved")]
-             if issues else ["- *なし*"]) + [
+             if issues else [f"- {_empty}"]) + [
             "",
-            "**デバッグ優先事項:** 既知の問題から着手し、変更ファイルを重点的に確認してください。",
+            t("handoff.debug_priority"),
         ]
 
     else:
         # full（デフォルト）: 全セクション
-        lines += section("保留中のタスク",
-            [f"- [ ] <!-- USER INPUT -->{t['title']}<!-- /USER INPUT -->"
-             + (f" — <!-- USER INPUT -->{t['description']}<!-- /USER INPUT -->" if t.get("description") else "")
-             for t in state.get("pending_tasks", [])])
+        lines += section(t("handoff.sec_pending"), _pending_items())
         # 外部入力（ユーザーが記録した内容）はタグで囲んで信頼済み指示と区別する
-        lines += section("最近のメモ（最新10件）", _note_lines(notes, 10))
+        lines += section(t("handoff.sec_notes", n=10), _note_lines(notes, 10))
         lines += _decisions_section(decisions)
-        lines += section("既知の問題・注意点", [_fmt_issue(i) for i in issues])
+        lines += section(t("handoff.sec_issues"), [_fmt_issue(i) for i in issues])
         # issue-016: 完了タスクのタイトルもユーザー入力なのでタグでラップする
-        lines += section("完了済みタスク（最近5件）",
-            [f"- ✅ `{t['id']}` <!-- USER INPUT -->{t['title']}<!-- /USER INPUT --> ({t.get('completed_at', '?')[:10]})"
-             for t in state.get("completed_tasks", [])[-5:]])
-        lines += section("完了した保留タスク（最近5件）",
-            [f"- ✅ `{t['id']}` <!-- USER INPUT -->{t['title']}<!-- /USER INPUT --> ({t.get('completed_at', '?')[:10]})"
-             for t in state.get("completed_pending_tasks", [])[-5:]])
+        lines += section(t("handoff.sec_done_tasks"),
+                         _done_task_items(state.get("completed_tasks", [])[-5:]))
+        lines += section(t("handoff.sec_done_pending"),
+                         _done_task_items(state.get("completed_pending_tasks", [])[-5:]))
 
     # ── 共通フッタ（セッション開始手順） ────────────────────────────────
     lines += [
-        "", "---", "", f"## {to_ai.upper()} セッション開始手順", "",
-        "**1. プロジェクトを設定する（毎セッション必須）**",
+        "", "---", "", t("handoff.sec_footer", ai=to_ai.upper()), "",
+        t("handoff.step1"),
         "```", f'collab_switch_project("{_get_project_dir()}")', "```", "",
-        "**2. 状態を確認する**",
+        t("handoff.step2"),
         "```", "collab_status()", "```", "",
-        "**3. 作業中はこまめにメモを残す**",
-        "```", 'collab_add_note("気づいたことや進捗")', "```", "",
-        "**4. セッション終了・レートリミット前にチェックポイントを生成する**",
-        "```", f'collab_checkpoint("ここまでの進捗と次の作業", "{from_ai}")', "```",
+        t("handoff.step3"),
+        "```", t("handoff.step3_code"), "```", "",
+        t("handoff.step4"),
+        "```", t("handoff.step4_code", from_ai=from_ai), "```",
     ]
     return "\n".join(lines) + "\n"
 
