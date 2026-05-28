@@ -568,3 +568,25 @@ def set_current_project(path: Path | None) -> None:
 def get_current_project_raw() -> Path | None:
     """Return the process-local active project path without validation."""
     return _current_project
+
+
+def read_raw_state_json(sf: Path) -> tuple[dict | None, bool, str | None]:
+    """
+    AI_STATE.json を正規化なしで直接読む（collab_doctor 専用）。
+
+    _load_state() は旧フォーマット自動マイグレーションを行うため、
+    正規化前の生の破損データを診断したい doctor はこちらを使う。
+
+    Returns:
+        (data, has_bom, error_message)
+        - data: パース成功時はdict、失敗時はNone
+        - has_bom: BOM(UTF-8 BOM)が検出された場合True
+        - error_message: パース失敗時のエラー文字列、成功時はNone
+    """
+    try:
+        raw = sf.read_bytes()
+        has_bom = raw.startswith(b'\xef\xbb\xbf')
+        text = raw.lstrip(b'\xef\xbb\xbf').decode('utf-8')
+        return json.loads(text), has_bom, None
+    except Exception as e:
+        return None, False, str(e)

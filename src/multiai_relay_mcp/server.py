@@ -53,6 +53,7 @@ from .state import (
     _handoff_file,
     _load_state,
     _now_iso,
+    _pid_exists,
     _sessions_dir,
     _state_file,
     _state_transaction,
@@ -224,69 +225,180 @@ def collab_version() -> str:
 
 @mcp.tool()
 def collab_doctor(
-    check_cli:     bool = True,
-    check_state:   bool = True,
-    check_lock:    bool = True,
-    check_ai_call: bool = False,
+    check_cli:      bool = True,
+    check_state:    bool = True,
+    check_lock:     bool = True,
+    check_ai_call:  bool = False,
+    check_schema:   bool = True,
+    check_encoding: bool = True,
+    check_issues:   bool = True,
+    check_recovery: bool = True,
+    output:         str  = "text",
 ) -> str:
     """
     MCPサーバーと実行環境の健全性を診断する。
 
     Args:
-        check_cli:     CLIコマンドの存在確認（デフォルト: True）
-        check_state:   AI_STATE.json の整合性確認（デフォルト: True）
-        check_lock:    ロックファイルの状態確認（デフォルト: True）
-        check_ai_call: AI CLI 呼び出し確認（高コスト、デフォルト: False）
+        check_cli:      CLIコマンドの存在確認（デフォルト: True）
+        check_state:    AI_STATE.json の整合性確認（デフォルト: True）
+        check_lock:     ロックファイルの状態確認（デフォルト: True）
+        check_ai_call:  AI CLI 呼び出し確認（高コスト、デフォルト: False）
+        check_schema:   スキーマバージョン・必須キーの確認（デフォルト: True）
+        check_encoding: BOM付きJSON検出（デフォルト: True）
+        check_issues:   Issueレコードの整合性確認（デフォルト: True）
+        check_recovery: アーカイブ・エクスポートファイルの確認（デフォルト: True）
+        output:         出力形式 "text"（デフォルト）または "json"
     """
-    ok_items:   list[str] = []
-    warn_items: list[str] = []
-    err_items:  list[str] = []
+    import time as _time
 
-    def ok(msg: str)   -> None: ok_items.append(f"✅ OK   {msg}")
-    def warn(msg: str) -> None: warn_items.append(f"⚠️ WARN {msg}")
-    def err(msg: str)  -> None: err_items.append(f"❌ ERR  {msg}")
+    # 診断結果リスト（JSON出力と text 出力を共通で管理）
+    diagnostics: list[dict] = []
 
-    # プロジェクトフォルダ確認
-    if state_mod.get_current_project_raw() is None:
-        warn("プロジェクト未設定 — collab_switch_project() を呼んでください")
-    elif not state_mod.get_current_project_raw().exists():
-        err(f"プロジェクトフォルダが存在しない: {state_mod.get_current_project_raw()}")
+    def _add(level: str, code: str, message: str, suggestion: str | None = None) -> None:
+        diagnostics.append({"level": level, "code": code, "message": message, "suggestion": suggestion})
+
+    def ok(code: str, msg: str, sug: str | None = None)   -> None: _add("OK",   code, msg, sug)
+    def warn(code: str, msg: str, sug: str | None = None) -> None: _add("WARN", code, msg, sug)
+    def err(code: str, msg: str, sug: str | None = None)  -> None: _add("ERR",  code, msg, sug)
+
+    proj = state_mod.get_current_project_raw()
+    sf   = (proj / "AI_STATE.json") if proj and proj.exists() else None
+
+    #region プロジェクトフォルダ確認
+    if proj is None:
+        warn("project_unset", "プロジェクト未設定", "collab_switch_project() を呼んでください")
+    elif not proj.exists():
+        err("project_missing", f"プロジェクトフォルダが存在しない: {proj}",
+            "collab_switch_project() で正しいパスを再設定してください")
     else:
-        ok(f"プロジェクトフォルダ: {state_mod.get_current_project_raw()}")
+        ok("project_dir", f"プロジェクトフォルダ: {proj}")
+    #endregion
 
-    # 状態ファイル確認
-    if check_state and state_mod.get_current_project_raw() and state_mod.get_current_project_raw().exists():
-        sf = _state_file()
-        if not sf.exists():
-            warn("AI_STATE.json が未作成 — collab_switch_project() で新規作成できます")
+    #region エンコーディング確認（BOM検出）
+    if check_encoding and sf and sf.exists():
+        raw_data, has_bom, raw_err = state_mod.read_raw_state_json(sf)
+        if raw_err:
+            err("encoding_parse", f"AI_STATE.json のパースに失敗: {raw_err}",
+                "collab_export_state/import_state replace で復旧できます")
+        elif has_bom:
+            warn("bom_detected", "AI_STATE.json に UTF-8 BOM が含まれています",
+                 "読み込みは可能ですが、次回保存時に自動でBOMなしへ正規化されます")
+        else:
+            ok("encoding_ok", "AI_STATE.json エンコーディング正常（BOMなし UTF-8）")
+    #endregion
+
+    #region スキーマ確認（raw JSON で正規化前の状態を検査）
+    if check_schema and sf and sf.exists():
+        raw_data, _, raw_err = state_mod.read_raw_state_json(sf)
+        if raw_data is not None:
+            # バージョン確認
+            raw_ver = raw_data.get("version", "(なし)")
+            if raw_ver != _STATE_SCHEMA_VERSION:
+                warn("schema_version",
+                     f"スキーマバージョン不一致: ファイル={raw_ver}, 期待={_STATE_SCHEMA_VERSION}",
+                     "collab_import_state validate で検証できます")
+            else:
+                ok("schema_version", f"スキーマバージョン: {raw_ver}")
+            # 必須キー確認
+            missing = [k for k in _STATE_DEFAULTS if k not in raw_data]
+            if missing:
+                warn("schema_missing_keys",
+                     f"必須キーが欠落: {', '.join(missing)}",
+                     "collab_switch_project() で再接続すると自動補完されます")
+            # リスト型の型確認
+            bad_types = [
+                k for k, v in _STATE_DEFAULTS.items()
+                if isinstance(v, list) and k in raw_data and not isinstance(raw_data[k], list)
+            ]
+            if bad_types:
+                warn("schema_bad_types",
+                     f"型不一致（リストが期待されるキー）: {', '.join(bad_types)}",
+                     "AI_STATE.json を手動修正するか collab_import_state replace で復旧してください")
+            if not missing and not bad_types:
+                ok("schema_keys", "必須キーと型は正常")
+    #endregion
+
+    #region 状態ファイル確認（_load_state 経由・正規化後）
+    if check_state and proj and proj.exists():
+        if not sf or not sf.exists():
+            warn("state_missing", "AI_STATE.json が未作成",
+                 "collab_switch_project() で新規作成できます")
         else:
             try:
-                state = _load_state()
-                ok(
-                    f"AI_STATE.json 正常"
-                    f" (担当: {state.get('current_ai','?').upper()}"
-                    f", セッション: #{state.get('session_count','?')})"
-                )
+                loaded = _load_state()
+                ok("state_load",
+                   f"AI_STATE.json 正常"
+                   f" (担当: {loaded.get('current_ai','?').upper()}"
+                   f", セッション: #{loaded.get('session_count','?')})")
             except Exception as e:
-                err(f"AI_STATE.json 読み込み失敗: {e}")
+                err("state_load_fail", f"AI_STATE.json 読み込み失敗: {e}",
+                    "collab_import_state replace で復旧できます")
+    #endregion
 
-    # ロックファイル確認
-    if check_lock and state_mod.get_current_project_raw() and state_mod.get_current_project_raw().exists():
-        lock_file = _get_project_dir() / "AI_STATE.lock"
+    #region Issue 整合性確認（raw JSON で正規化前の状態を検査）
+    if check_issues and sf and sf.exists():
+        raw_data, _, _ = state_mod.read_raw_state_json(sf)
+        if raw_data is not None:
+            for list_key in ("known_issues", "resolved_issues"):
+                issues = raw_data.get(list_key, [])
+                if not isinstance(issues, list):
+                    continue
+                # 非dict要素（旧テキストフォーマット等）
+                non_dict_idx = [i for i, iss in enumerate(issues) if not isinstance(iss, dict)]
+                if non_dict_idx:
+                    warn("issues_non_dict",
+                         f"{list_key}[{non_dict_idx}]: dict でない要素あり（旧フォーマット）",
+                         "collab_switch_project() で再接続すると自動マイグレーションされます")
+                # 有効な dict issue のみ詳細検査
+                dict_issues = [iss for iss in issues if isinstance(iss, dict)]
+                # severity 不正値
+                bad_sev = [
+                    iss.get("id", "?") for iss in dict_issues
+                    if "severity" in iss and iss["severity"] not in VALID_SEVERITIES
+                ]
+                if bad_sev:
+                    warn("issues_bad_severity",
+                         f"{list_key}: 無効な severity — {bad_sev}",
+                         "collab_update_issue で P0/P1/P2/P3 に修正してください")
+                # 重複ID
+                ids = [iss.get("id") for iss in dict_issues]
+                seen: set = set()
+                dups = [i for i in ids if i is not None and (i in seen or not seen.add(i))]  # type: ignore[func-returns-value]
+                if dups:
+                    warn("issues_duplicate_id",
+                         f"{list_key}: 重複する issue ID — {list(dict.fromkeys(dups))}",
+                         "AI_STATE.json を手動確認して重複を解消してください")
+                if not non_dict_idx and not bad_sev and not dups:
+                    ok(f"issues_{list_key}", f"{list_key}: {len(issues)}件 正常")
+    #endregion
+
+    #region ロックファイル確認（PID生存確認・経過秒付き）
+    if check_lock and proj and proj.exists():
+        lock_file = proj / "AI_STATE.lock"
         if lock_file.exists():
             try:
-                data = json.loads(lock_file.read_text(encoding="utf-8"))
-                pid  = data.get("pid", 0)
-                if _pid_exists(pid):
-                    warn(f"ロックファイルあり (PID {pid} は生存中) — 別プロセスが書き込み中の可能性")
+                text = lock_file.read_text(encoding="utf-8").strip()
+                pid  = int(text) if text.isdigit() else None
+                age  = int(_time.time() - lock_file.stat().st_mtime)
+                if pid is None:
+                    warn("lock_bad_content", f"ロックファイル内容が不正: {text!r}",
+                         "手動削除を検討: AI_STATE.lock")
+                elif _pid_exists(pid):
+                    warn("lock_alive",
+                         f"ロックファイルあり (PID {pid} は生存中, {age}秒経過)",
+                         "別プロセスが書き込み中の可能性")
                 else:
-                    warn(f"古いロックファイルあり (PID {pid} は不在) — 次回書き込み時に自動解除されます")
-            except Exception:
-                warn("ロックファイルあり（解析不能）— 手動削除を検討: AI_STATE.lock")
+                    warn("lock_stale",
+                         f"古いロックファイル (PID {pid} は不在, {age}秒経過)",
+                         "次回書き込み時に自動解除されます")
+            except Exception as e:
+                warn("lock_parse_fail", f"ロックファイル解析失敗: {e}",
+                     "手動削除を検討: AI_STATE.lock")
         else:
-            ok("ロックファイルなし（正常）")
+            ok("lock_clean", "ロックファイルなし（正常）")
+    #endregion
 
-    # CLI コマンド確認
+    #region CLI コマンド確認
     if check_cli:
         config = _load_cli_config()
         for ai_name in VALID_AI:
@@ -294,11 +406,13 @@ def collab_doctor(
             cmd  = cfg.get("command", DEFAULT_CLI_CONFIG[ai_name]["command"])
             path = _resolve_cli_path(ai_name, cmd)
             if path:
-                ok(f"{ai_name.upper()} CLI: {path}")
+                ok(f"cli_{ai_name}", f"{ai_name.upper()} CLI: {path}")
             else:
-                warn(f"{ai_name.upper()} CLI 未検出 ({cmd}) — collab_setup_cli() で設定してください")
+                warn(f"cli_{ai_name}_missing", f"{ai_name.upper()} CLI 未検出 ({cmd})",
+                     "collab_setup_cli() で設定してください")
+    #endregion
 
-    # AI 呼び出し確認（高コスト・オプション）
+    #region AI 呼び出し確認（高コスト・オプション）
     if check_ai_call:
         for ai_name in VALID_AI:
             config = _load_cli_config()
@@ -306,20 +420,50 @@ def collab_doctor(
             cmd    = cfg.get("command", DEFAULT_CLI_CONFIG[ai_name]["command"])
             path   = _resolve_cli_path(ai_name, cmd)
             if not path:
-                warn(f"{ai_name.upper()} CLI 呼び出しテストをスキップ（コマンド未検出）")
+                warn(f"ai_call_{ai_name}_skip",
+                     f"{ai_name.upper()} CLI 呼び出しテストをスキップ（コマンド未検出）")
                 continue
             try:
-                result = _call_ai_cli(ai_name, "ヘルスチェックです。「OK」とだけ答えてください。", timeout=30)
-                if result.startswith("エラー"):
-                    warn(f"{ai_name.upper()} CLI 応答エラー: {result[:80]}")
+                ai_result = _call_ai_cli(ai_name, "ヘルスチェックです。「OK」とだけ答えてください。", timeout=30)
+                if ai_result.startswith("エラー"):
+                    warn(f"ai_call_{ai_name}_err", f"{ai_name.upper()} CLI 応答エラー: {ai_result[:80]}")
                 else:
-                    ok(f"{ai_name.upper()} CLI 呼び出し成功")
+                    ok(f"ai_call_{ai_name}", f"{ai_name.upper()} CLI 呼び出し成功")
             except Exception as e:
-                err(f"{ai_name.upper()} CLI 呼び出し例外: {e}")
+                err(f"ai_call_{ai_name}_exc", f"{ai_name.upper()} CLI 呼び出し例外: {e}")
+    #endregion
 
-    summary  = f"OK: {len(ok_items)}件  WARN: {len(warn_items)}件  ERR: {len(err_items)}件"
-    all_items = ok_items + warn_items + err_items
-    return f"# 診断結果 — {summary}\n" + "\n".join(all_items)
+    #region 復旧関連ファイル確認
+    if check_recovery and proj and proj.exists():
+        archive = proj / "AI_STATE.archive.json"
+        if archive.exists():
+            size_kb = archive.stat().st_size // 1024
+            ok("recovery_archive", f"AI_STATE.archive.json あり ({size_kb}KB)")
+        exports = list(proj.glob("*.export.json"))
+        if exports:
+            ok("recovery_export", f"エクスポートファイル: {len(exports)}件")
+    #endregion
+
+    #region 出力
+    ok_count   = sum(1 for d in diagnostics if d["level"] == "OK")
+    warn_count = sum(1 for d in diagnostics if d["level"] == "WARN")
+    err_count  = sum(1 for d in diagnostics if d["level"] == "ERR")
+
+    if output == "json":
+        return json.dumps(
+            {"summary": {"ok": ok_count, "warn": warn_count, "err": err_count},
+             "diagnostics": diagnostics},
+            ensure_ascii=False, indent=2,
+        )
+
+    _EMOJI = {"OK": "✅ OK  ", "WARN": "⚠️ WARN", "ERR": "❌ ERR "}
+    lines = [f"# 診断結果 — OK: {ok_count}件  WARN: {warn_count}件  ERR: {err_count}件"]
+    for d in diagnostics:
+        prefix = _EMOJI.get(d["level"], d["level"])
+        sug    = f" → {d['suggestion']}" if d.get("suggestion") else ""
+        lines.append(f"{prefix}  {d['message']}{sug}")
+    return "\n".join(lines)
+    #endregion
 
 #endregion
 
@@ -1827,7 +1971,7 @@ def _print_help(version_only: bool = False) -> None:
 
 
 
-_VERSION = "1.0.16"
+_VERSION = "1.0.17"
 
 # ヘルプテキスト（AIが読むことを想定して日本語で詳述）
 _HELP_TEXT = f"""\
