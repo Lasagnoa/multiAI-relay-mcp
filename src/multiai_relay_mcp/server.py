@@ -18,6 +18,8 @@ import datetime
 import os
 import sys
 import tempfile
+import time
+from collections import Counter
 from pathlib import Path
 
 from mcp.server.fastmcp import FastMCP
@@ -34,7 +36,6 @@ from .cli import (
 from .rendering import _build_handoff
 from .state import (
     DEFAULT_CLI_CONFIG,
-    MODE_LABELS,
     VALID_AI,
     VALID_HANDOFF_TEMPLATES,
     VALID_ISSUE_STATUSES,
@@ -307,8 +308,6 @@ def collab_doctor(
     """
     try:
         with state_mod.project_context(project_path):
-            import time as _time
-
             # 診断結果リスト（JSON出力と text 出力を共通で管理）
             diagnostics: list[dict] = []
 
@@ -423,9 +422,8 @@ def collab_doctor(
                                  f"{list_key}: 無効な severity — {bad_sev}",
                                  "collab_update_issue で P0/P1/P2/P3 に修正してください")
                         # 重複ID（Counter で正確に集計）
-                        from collections import Counter as _Counter
                         ids = [iss.get("id") for iss in dict_issues]
-                        id_counts = _Counter(i for i in ids if i is not None)
+                        id_counts = Counter(i for i in ids if i is not None)
                         dups = [i for i, cnt in id_counts.items() if cnt > 1]
                         if dups:
                             warn("issues_duplicate_id",
@@ -499,7 +497,7 @@ def collab_doctor(
                     try:
                         text = lock_file.read_text(encoding="utf-8").strip()
                         pid  = int(text) if text.isdigit() else None
-                        age  = int(_time.time() - lock_file.stat().st_mtime)
+                        age  = int(time.time() - lock_file.stat().st_mtime)
                         if pid is None:
                             warn("lock_bad_content", f"ロックファイル内容が不正: {text!r}",
                                  "手動削除を検討: AI_STATE.lock")
@@ -551,7 +549,8 @@ def collab_doctor(
                             else "ヘルスチェックです。「OK」とだけ答えてください。"
                         )
                         ai_result = _call_ai_cli(ai_name, _health_prompt, timeout=30)
-                        if ai_result.startswith("エラー"):
+                        # i18n対応: エラーメッセージは言語によって "エラー:" / "Error:" で始まる
+                        if ai_result.startswith(("エラー", "Error")):
                             warn(f"ai_call_{ai_name}_err", f"{ai_name.upper()} CLI 応答エラー: {ai_result[:80]}")
                         else:
                             ok(f"ai_call_{ai_name}", f"{ai_name.upper()} CLI 呼び出し成功")
@@ -1453,7 +1452,13 @@ def collab_discuss(ai: str, topic: str, rounds: int = 2, project_path: str = '')
 
 
 @mcp.tool()
-def collab_setup_cli(ai: str, command: str, args_before: list[str] = [], args_after: list[str] = [], project_path: str = '') -> str:
+def collab_setup_cli(
+    ai: str,
+    command: str,
+    args_before: list[str] | None = None,
+    args_after: list[str] | None = None,
+    project_path: str = '',
+) -> str:
     """
     CLI の呼び出し設定をカスタマイズして保存する。
     デフォルト設定で動かない場合に使う。
@@ -1461,8 +1466,8 @@ def collab_setup_cli(ai: str, command: str, args_before: list[str] = [], args_af
     Args:
         ai: 設定するAI。"claude" または "codex"
         command: CLIのコマンド名またはフルパス
-        args_before: プロンプトの前に渡す引数
-        args_after: プロンプトの後に渡す引数
+        args_before: プロンプトの前に渡す引数（省略時は空リスト）
+        args_after: プロンプトの後に渡す引数（省略時は空リスト）
     """
     try:
         with state_mod.project_context(project_path):
@@ -1475,7 +1480,7 @@ def collab_setup_cli(ai: str, command: str, args_before: list[str] = [], args_af
             if cmd_stem not in VALID_AI:
                 return t("setup_cli.err_cmd", cmd=command, stem=cmd_stem)
 
-            # args の型検証
+            # None デフォルトを空リストに正規化
             if not isinstance(args_before, list):
                 args_before = []
             if not isinstance(args_after, list):
@@ -1716,7 +1721,7 @@ def collab_timeline(
 @mcp.tool()
 def collab_request_review(
     ai:          str,
-    focus:       list[str] = [],
+    focus:       list[str] | None = None,
     scope:       str = "",
     save_result: bool = True,
     project_path: str = '',
@@ -1727,7 +1732,7 @@ def collab_request_review(
 
     Args:
         ai:          レビュアーAI。"claude" または "codex"
-        focus:       レビューの重点事項リスト（例: ["セキュリティ", "パフォーマンス"]）
+        focus:       レビューの重点事項リスト（例: ["セキュリティ", "パフォーマンス"]）（省略時は空リスト）
         scope:       レビュー対象の説明（ファイル名・機能名など）
         save_result: 結果をメモとして保存するか（デフォルト: True）
     """
@@ -1736,6 +1741,9 @@ def collab_request_review(
             if ai not in VALID_AI:
                 return t("err.invalid_ai")
 
+            # None デフォルトを空リストに正規化
+            if not isinstance(focus, list):
+                focus = []
             focus_text = "・".join(focus) if focus else t("request_review.focus_default")
             scope_text = scope or t("request_review.scope_default")
             question = t("request_review.question", scope=scope_text, focus=focus_text)
@@ -1910,17 +1918,7 @@ def collab_cleanup_history(
                 arc["last_archived"] = _now_iso()
 
                 # アーカイブファイルを原子的に書き込む
-                tmp_fd, tmp_path = tempfile.mkstemp(dir=_get_project_dir(), suffix=".tmp", prefix="arc_")
-                try:
-                    with os.fdopen(tmp_fd, "w", encoding="utf-8") as f:
-                        json.dump(arc, f, ensure_ascii=False, indent=2)
-                    os.replace(tmp_path, af)
-                except Exception:
-                    try:
-                        os.unlink(tmp_path)
-                    except OSError:
-                        pass
-                    raise
+                _write_atomic(af, json.dumps(arc, ensure_ascii=False, indent=2))
 
             # 状態を更新（古いレコードを削除）
             with _state_transaction() as st:
@@ -2201,7 +2199,6 @@ def _print_help(version_only: bool = False) -> None:
             return
         except OSError:
             pass
-
 
 
 _VERSION = "1.1.0"

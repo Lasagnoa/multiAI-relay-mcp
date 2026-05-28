@@ -735,25 +735,6 @@ def project_context(project_path: "str | Path | None" = None):
         _project_override.reset(token)
 
 
-def begin_project_override(project_path: "str | Path | None") -> "object | None":
-    """
-    project_context を使わず ContextVar を直接設定する（try/finally 用）。
-
-    project_path が空・None なら None を返す（end_project_override は no-op）。
-    戻り値のトークンは end_project_override に渡してリセットすること。
-    """
-    if not project_path:
-        return None
-    resolved = _resolve_project_path(project_path)
-    return _project_override.set(resolved)
-
-
-def end_project_override(token: "object | None") -> None:
-    """begin_project_override で得たトークンを使って ContextVar をリセットする。"""
-    if token is not None:
-        _project_override.reset(token)
-
-
 def read_raw_state_json(sf: Path) -> tuple[dict | None, bool, str | None]:
     """
     AI_STATE.json を正規化なしで直接読む（collab_doctor 専用）。
