@@ -26,11 +26,5 @@ dependencies = ["mcp[cli]>=1.0.0"]
 [project.scripts]
 multiai-relay-mcp = "multiai_relay_mcp.server:main"
 
-[project.optional-dependencies]
-dev = ["pytest>=8.0", "anyio[trio]>=4.0"]
-
 [tool.hatch.build.targets.wheel]
 packages = ["src/multiai_relay_mcp"]
-
-[tool.pytest.ini_options]
-testpaths = ["tests"]
