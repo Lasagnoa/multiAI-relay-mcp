@@ -1129,6 +1129,7 @@ def _call_ai_cli(ai: str, prompt: str, timeout: int = 180) -> str:
     try:
         result = subprocess.run(
             cmd, capture_output=True, text=True,
+            stdin=subprocess.DEVNULL,  # MCP stdio パイプが stdin に流れ込んでブロックするのを防ぐ
             timeout=timeout, encoding="utf-8", errors="replace",
         )
         response = result.stdout.strip() or result.stderr.strip()
@@ -1492,7 +1493,7 @@ def _print_help(version_only: bool = False) -> None:
 
 
 
-_VERSION = "1.0.8"
+_VERSION = "1.0.9"
 
 # ヘルプテキスト（AIが読むことを想定して日本語で詳述）
 _HELP_TEXT = f"""\
