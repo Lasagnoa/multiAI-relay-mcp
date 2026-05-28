@@ -1126,13 +1126,28 @@ def _call_ai_cli(ai: str, prompt: str, timeout: int = 180) -> str:
         )
 
     cmd = [cli_path] + cfg.get("args_before", []) + [prompt] + cfg.get("args_after", [])
+
+    # プロジェクトディレクトリをCWDに設定する（Codex はgitリポジトリ内での実行が必要）
+    cwd = str(_current_project) if _current_project and _current_project.exists() else None
+
+    # CLIが標準出力に出力するノイズ行（stdin確認メッセージなど）
+    _NOISE_LINES: set[str] = {
+        "Reading additional input from stdin...",
+    }
+
     try:
         result = subprocess.run(
             cmd, capture_output=True, text=True,
             stdin=subprocess.DEVNULL,  # MCP stdio パイプが stdin に流れ込んでブロックするのを防ぐ
+            cwd=cwd,  # プロジェクトディレクトリで実行（git repo チェック対応）
             timeout=timeout, encoding="utf-8", errors="replace",
         )
-        response = result.stdout.strip() or result.stderr.strip()
+        # ノイズ行を除去してから応答テキストを構築
+        cleaned_lines = [
+            line for line in result.stdout.splitlines()
+            if line.strip() not in _NOISE_LINES
+        ]
+        response = "\n".join(cleaned_lines).strip() or result.stderr.strip()
         if not response:
             # 応答が空の場合は対話TUIが起動した可能性がある
             return (
@@ -1493,7 +1508,7 @@ def _print_help(version_only: bool = False) -> None:
 
 
 
-_VERSION = "1.0.9"
+_VERSION = "1.0.10"
 
 # ヘルプテキスト（AIが読むことを想定して日本語で詳述）
 _HELP_TEXT = f"""\

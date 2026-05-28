@@ -30,7 +30,7 @@ Claude Desktop と Codex Desktop が MCP を通じて状態を共有し、セッ
 ```json
 "multiai-relay-mcp": {
   "command": "uvx",
-  "args": ["--index-url", "https://test.pypi.org/simple/", "--extra-index-url", "https://pypi.org/simple/", "multiai-relay-mcp==1.0.9"]
+  "args": ["--index-url", "https://test.pypi.org/simple/", "--extra-index-url", "https://pypi.org/simple/", "multiai-relay-mcp==1.0.10"]
 }
 ```
 
@@ -44,12 +44,12 @@ Claude Desktop と Codex Desktop が MCP を通じて状態を共有し、セッ
 ```toml
 [mcp_servers.multiai-relay-mcp]
 command = 'uvx'
-args = ['--index-url', 'https://test.pypi.org/simple/', '--extra-index-url', 'https://pypi.org/simple/', 'multiai-relay-mcp==1.0.9']
+args = ['--index-url', 'https://test.pypi.org/simple/', '--extra-index-url', 'https://pypi.org/simple/', 'multiai-relay-mcp==1.0.10']
 ```
 
 > 追加後は Codex Desktop を再起動。
 
-> **バージョンアップ手順:** 設定の `==1.0.9` を新バージョンに書き換え → `clear-multiai-cache.sh` 実行（またはキャッシュ手動削除）→ Desktop 再起動 → `collab_summary()` でバージョン確認。
+> **バージョンアップ手順:** 設定の `==1.0.10` を新バージョンに書き換え → `clear-multiai-cache.sh` 実行（またはキャッシュ手動削除）→ Desktop 再起動 → `collab_summary()` でバージョン確認。
 
 ---
 
@@ -172,7 +172,7 @@ Add to `%APPDATA%\Claude\claude_desktop_config.json` (Windows) or `~/Library/App
 ```json
 "multiai-relay-mcp": {
   "command": "uvx",
-  "args": ["--index-url", "https://test.pypi.org/simple/", "--extra-index-url", "https://pypi.org/simple/", "multiai-relay-mcp==1.0.9"]
+  "args": ["--index-url", "https://test.pypi.org/simple/", "--extra-index-url", "https://pypi.org/simple/", "multiai-relay-mcp==1.0.10"]
 }
 ```
 
@@ -186,12 +186,12 @@ Add to `~/.codex/config.toml`:
 ```toml
 [mcp_servers.multiai-relay-mcp]
 command = 'uvx'
-args = ['--index-url', 'https://test.pypi.org/simple/', '--extra-index-url', 'https://pypi.org/simple/', 'multiai-relay-mcp==1.0.9']
+args = ['--index-url', 'https://test.pypi.org/simple/', '--extra-index-url', 'https://pypi.org/simple/', 'multiai-relay-mcp==1.0.10']
 ```
 
 > Restart Codex Desktop after editing.
 
-> **Upgrading:** Change `==1.0.9` to the new version in your config → run `clear-multiai-cache.sh` (or delete cached `.rkyv` files manually) → restart Desktop → confirm with `collab_summary()`.
+> **Upgrading:** Change `==1.0.10` to the new version in your config → run `clear-multiai-cache.sh` (or delete cached `.rkyv` files manually) → restart Desktop → confirm with `collab_summary()`.
 
 ---
 
