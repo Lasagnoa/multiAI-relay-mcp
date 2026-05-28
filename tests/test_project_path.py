@@ -1,4 +1,4 @@
-"""pending-011 project_path API のテスト。
+"""pending-011 / issue-027 / issue-028 project_path API のテスト。
 
 テスト観点:
 - project_path=B を指定した場合、Bだけに作用し current_project(A) を汚さない
@@ -7,10 +7,13 @@
 - project_path なし（旧挙動）が維持される
 - 存在しない project_path は明確なエラーになる
 - cwd 探索フォールバック（AI_STATE.json がある場合のみ）
+- issue-027: collab_current_project / collab_version が effective project を表示する
+- issue-028: CLI系4ツール（consult/discuss/request_review/setup_cli）が project_path に対応する
 """
 import json
 import pytest
 from pathlib import Path
+from unittest.mock import patch
 
 from multiai_relay_mcp import server
 from multiai_relay_mcp import state as state_mod
@@ -217,3 +220,101 @@ def test_cwd_fallback_does_not_create(tmp_path, monkeypatch):
             state_mod._get_project_dir()
     finally:
         state_mod.set_current_project(None)
+
+
+# ─── テスト: issue-027 表示系の effective project 反映 ────────
+
+def test_current_project_shows_b_when_project_path_b(project_a, project_b):
+    """current_project=A + project_path=B → collab_current_project がBを表示する。"""
+    result = server.collab_current_project(project_path=str(project_b))
+    assert str(project_b) in result
+    assert state_mod.get_current_project_raw() == project_a
+
+
+def test_current_project_none_shows_b_when_project_path_b(tmp_path):
+    """current_project 未設定 + project_path=B → collab_current_project がBを表示する（未設定エラーにならない）。"""
+    b = tmp_path / "proj_b"
+    b.mkdir()
+    _write_state(b, name="ProjectB")
+    state_mod.set_current_project(None)
+    try:
+        result = server.collab_current_project(project_path=str(b))
+        assert str(b) in result
+        assert "未設定" not in result
+        assert "設定されていません" not in result
+    finally:
+        state_mod.set_current_project(None)
+
+
+def test_version_shows_b_path_when_project_path_b(project_a, project_b):
+    """current_project=A + project_path=B → collab_version のプロジェクトパスがBを表示する。"""
+    result = server.collab_version(project_path=str(project_b))
+    assert str(project_b) in result
+    assert state_mod.get_current_project_raw() == project_a
+
+
+def test_version_none_shows_b_path_when_project_path_b(tmp_path):
+    """current_project 未設定 + project_path=B → collab_version のプロジェクトパスがBを表示する。"""
+    b = tmp_path / "proj_b"
+    b.mkdir()
+    _write_state(b, name="ProjectB")
+    state_mod.set_current_project(None)
+    try:
+        result = server.collab_version(project_path=str(b))
+        assert str(b) in result
+    finally:
+        state_mod.set_current_project(None)
+
+
+# ─── テスト: issue-028 CLI系ツールの project_path 対応 ────────
+
+def test_consult_saves_to_b_only(project_a, project_b):
+    """collab_consult(project_path=B) がBのメモにだけ保存し、Aを汚さない。"""
+    with patch("multiai_relay_mcp.server._call_ai_cli", return_value="モックレスポンス"):
+        server.collab_consult("claude", "テスト質問_UNIQUE_CONSULT", project_path=str(project_b))
+
+    state_b = json.loads((project_b / "AI_STATE.json").read_text(encoding="utf-8"))
+    assert any("テスト質問_UNIQUE_CONSULT" in str(n) for n in state_b["notes"])
+
+    state_a = json.loads((project_a / "AI_STATE.json").read_text(encoding="utf-8"))
+    assert not any("テスト質問_UNIQUE_CONSULT" in str(n) for n in state_a["notes"])
+
+    assert state_mod.get_current_project_raw() == project_a
+
+
+def test_request_review_saves_to_b_only(project_a, project_b):
+    """collab_request_review(project_path=B) がBのメモにだけ保存し、Aを汚さない。"""
+    with patch("multiai_relay_mcp.server._call_ai_cli", return_value="レビューモックレスポンス"):
+        server.collab_request_review("claude", scope="テスト_UNIQUE_REVIEW", project_path=str(project_b))
+
+    state_b = json.loads((project_b / "AI_STATE.json").read_text(encoding="utf-8"))
+    assert any("テスト_UNIQUE_REVIEW" in str(n) for n in state_b["notes"])
+
+    state_a = json.loads((project_a / "AI_STATE.json").read_text(encoding="utf-8"))
+    assert not any("テスト_UNIQUE_REVIEW" in str(n) for n in state_a["notes"])
+
+    assert state_mod.get_current_project_raw() == project_a
+
+
+def test_setup_cli_writes_to_b_only(project_a, project_b):
+    """collab_setup_cli(project_path=B) がBのcli_config.jsonにだけ書き込み、Aを汚さない。"""
+    server.collab_setup_cli("claude", "claude", project_path=str(project_b))
+
+    assert (project_b / "cli_config.json").exists()
+    assert not (project_a / "cli_config.json").exists()
+    assert state_mod.get_current_project_raw() == project_a
+
+
+def test_discuss_saves_to_b_only(project_a, project_b):
+    """collab_discuss(project_path=B, rounds=1) がBのメモにだけ保存し、Aを汚さない。"""
+    with patch("multiai_relay_mcp.server._call_ai_cli", return_value="議論モックレスポンス"):
+        server.collab_discuss("claude", "テスト議題_UNIQUE_DISCUSS", rounds=1,
+                               project_path=str(project_b))
+
+    state_b = json.loads((project_b / "AI_STATE.json").read_text(encoding="utf-8"))
+    assert any("テスト議題_UNIQUE_DISCUSS" in str(n) for n in state_b["notes"])
+
+    state_a = json.loads((project_a / "AI_STATE.json").read_text(encoding="utf-8"))
+    assert not any("テスト議題_UNIQUE_DISCUSS" in str(n) for n in state_a["notes"])
+
+    assert state_mod.get_current_project_raw() == project_a

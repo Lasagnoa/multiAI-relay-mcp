@@ -30,6 +30,8 @@ TARGETS = {
     'collab_search', 'collab_timeline', 'collab_summary',
     'collab_cleanup_sessions', 'collab_cleanup_history',
     'collab_export_state', 'collab_import_state', 'collab_set_handoff_template',
+    # issue-028: CLI系ツールを追加
+    'collab_consult', 'collab_discuss', 'collab_request_review', 'collab_setup_cli',
 }
 
 source = SRC.read_text(encoding='utf-8')

@@ -15,7 +15,7 @@ Claude Desktop と Codex Desktop が MCP を通じて状態を共有し、セッ
 - 📦 **プロジェクトフォルダ外への書き込みゼロ** — ホームディレクトリを汚さない
 
 > **設計上の制約:** MCP サーバーは Desktop アプリごとに独立したプロセスとして起動されます。  
-> **1 プロセス = 1 アクティブプロジェクト** の前提です。複数プロジェクトを並行して扱う場合は、それぞれ別の Desktop インスタンス（または別の MCP サーバー設定）を使用してください。  
+> **1 プロセス = 1 セッションデフォルトプロジェクト** です。`collab_switch_project()` でセッション既定を設定し、個別ツール呼び出しでは `project_path=` で別プロジェクトを一時指定できます。  
 > 詳細・復旧手順 → [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md)
 
 ---
@@ -34,7 +34,7 @@ Claude Desktop と Codex Desktop が MCP を通じて状態を共有し、セッ
 ```json
 "multiai-relay-mcp": {
   "command": "uvx",
-  "args": ["--index-url", "https://test.pypi.org/simple/", "--extra-index-url", "https://pypi.org/simple/", "multiai-relay-mcp==1.0.14"]
+  "args": ["--index-url", "https://test.pypi.org/simple/", "--extra-index-url", "https://pypi.org/simple/", "multiai-relay-mcp==1.0.21"]
 }
 ```
 
@@ -48,7 +48,7 @@ Claude Desktop と Codex Desktop が MCP を通じて状態を共有し、セッ
 ```toml
 [mcp_servers.multiai-relay-mcp]
 command = 'uvx'
-args = ['--index-url', 'https://test.pypi.org/simple/', '--extra-index-url', 'https://pypi.org/simple/', 'multiai-relay-mcp==1.0.14']
+args = ['--index-url', 'https://test.pypi.org/simple/', '--extra-index-url', 'https://pypi.org/simple/', 'multiai-relay-mcp==1.0.21']
 ```
 
 > 追加後は Codex Desktop を再起動。
@@ -75,6 +75,29 @@ collab_record_issue("ログイン後のリダイレクトが未実装")
 collab_set_task("認証機能の実装")
 collab_record_file("src/auth.py")
 ```
+
+### マルチプロジェクト操作（`project_path` パラメータ）
+
+v1.0.21 以降、ほぼ全てのツールに `project_path: str = ''` パラメータが追加されました。  
+`project_path` を指定すると、**セッションデフォルト（`collab_switch_project()` で設定したプロジェクト）を変えずに**、そのツール呼び出しだけ別プロジェクトに作用します。
+
+```
+# セッションデフォルト: ProjectA
+collab_switch_project("D:\\projects\\ProjectA")
+
+# ProjectB の状態を確認（A は変わらない）
+collab_status(project_path="D:\\projects\\ProjectB")
+
+# ProjectB にメモを追加（A は汚れない）
+collab_add_note("B専用メモ", project_path="D:\\projects\\ProjectB")
+
+# 次のツール呼び出しは A に戻る
+collab_status()  # → ProjectA を表示
+```
+
+**使い分けの目安:**
+- `collab_switch_project()` — そのセッション全体の既定プロジェクトを設定（旧来どおり）
+- `project_path=` — 1回だけ別プロジェクトに作用させたい場合（セッション既定は維持）
 
 ### タスク終了時
 
@@ -170,7 +193,7 @@ A collaborative development system that lets Claude Desktop and Codex Desktop sh
 - 📦 **Zero writes outside project folder** — No home directory pollution
 
 > **Design constraint:** The MCP server runs as a separate process per Desktop app.  
-> **1 process = 1 active project.** To work on multiple projects in parallel, use separate Desktop instances or separate MCP server configurations.
+> **1 process = 1 session-default project.** Use `collab_switch_project()` to set the session default. For individual calls targeting a different project, pass `project_path=` to any tool — the session default stays unchanged.
 
 ---
 
@@ -189,7 +212,7 @@ Add to `%APPDATA%\Claude\claude_desktop_config.json` (Windows) or `~/Library/App
 ```json
 "multiai-relay-mcp": {
   "command": "uvx",
-  "args": ["--index-url", "https://test.pypi.org/simple/", "--extra-index-url", "https://pypi.org/simple/", "multiai-relay-mcp==1.0.14"]
+  "args": ["--index-url", "https://test.pypi.org/simple/", "--extra-index-url", "https://pypi.org/simple/", "multiai-relay-mcp==1.0.21"]
 }
 ```
 
@@ -203,7 +226,7 @@ Add to `~/.codex/config.toml`:
 ```toml
 [mcp_servers.multiai-relay-mcp]
 command = 'uvx'
-args = ['--index-url', 'https://test.pypi.org/simple/', '--extra-index-url', 'https://pypi.org/simple/', 'multiai-relay-mcp==1.0.14']
+args = ['--index-url', 'https://test.pypi.org/simple/', '--extra-index-url', 'https://pypi.org/simple/', 'multiai-relay-mcp==1.0.21']
 ```
 
 > Restart Codex Desktop after editing.
@@ -220,6 +243,29 @@ args = ['--index-url', 'https://test.pypi.org/simple/', '--extra-index-url', 'ht
 collab_switch_project("/path/to/your-project")
 collab_status()
 ```
+
+### Multi-project operations (`project_path` parameter)
+
+Since v1.0.21, almost all tools accept an optional `project_path: str = ''` parameter.  
+When provided, that single call operates on the specified project **without changing the session default** set by `collab_switch_project()`.
+
+```
+# Session default: ProjectA
+collab_switch_project("/projects/ProjectA")
+
+# Check ProjectB status (A is unchanged)
+collab_status(project_path="/projects/ProjectB")
+
+# Add a note to ProjectB (A is not affected)
+collab_add_note("B-specific note", project_path="/projects/ProjectB")
+
+# Next call goes back to A
+collab_status()  # → shows ProjectA
+```
+
+**When to use each:**
+- `collab_switch_project()` — set the session-wide default (same as before)
+- `project_path=` — target a different project for one call, keeping the session default
 
 ### During work
 

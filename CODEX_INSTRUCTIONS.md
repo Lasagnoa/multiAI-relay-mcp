@@ -28,7 +28,7 @@
 ```toml
 [mcp_servers.multiai-relay-mcp]
 command = 'uvx'
-args = ['--index-url', 'https://test.pypi.org/simple/', '--extra-index-url', 'https://pypi.org/simple/', 'multiai-relay-mcp==1.0.14']
+args = ['--index-url', 'https://test.pypi.org/simple/', '--extra-index-url', 'https://pypi.org/simple/', 'multiai-relay-mcp==1.0.21']
 ```
 
 > **バージョンアップ手順:** `==1.0.11` を新バージョンに書き換え → `clear-multiai-cache.sh` 実行 → Codex Desktop 再起動 → `collab_summary()` で確認。
@@ -56,6 +56,27 @@ collab_switch_project("D:\\path\\to\\project")
 
 ```
 collab_status()
+```
+
+---
+
+## マルチプロジェクト操作（`project_path` パラメータ）
+
+v1.0.21 以降、ほぼ全てのツールに `project_path: str = ''` パラメータが追加されました。  
+`project_path` を指定すると、セッションデフォルト（`collab_switch_project()` で設定）を変えずに、  
+そのツール呼び出しだけ別プロジェクトに作用させることができます。
+
+```
+# セッションデフォルト: ProjectA（collab_switch_project で設定済み）
+
+# ProjectB の状態をチェック（A は変わらない）
+collab_status(project_path="D:\\projects\\ProjectB")
+
+# ProjectB にメモを追加（A は汚れない）
+collab_add_note("B専用メモ", project_path="D:\\projects\\ProjectB")
+
+# 次の呼び出しは A に戻る
+collab_status()  # → ProjectA
 ```
 
 ---

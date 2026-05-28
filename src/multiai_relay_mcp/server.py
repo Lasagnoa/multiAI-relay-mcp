@@ -172,22 +172,25 @@ def collab_current_project(project_path: str = '') -> str:
     """現在アクティブなプロジェクトのパスと存在状態を確認する。"""
     try:
         with state_mod.project_context(project_path):
-            if state_mod.get_current_project_raw() is None:
+            # ContextVar override を優先した有効プロジェクトパスを取得
+            try:
+                effective = _get_project_dir()
+            except RuntimeError:
                 return "現在のプロジェクトは設定されていません。collab_switch_project() を呼び出してください。"
-            if not state_mod.get_current_project_raw().exists():
+            if not effective.exists():
                 return (
-                    f"⚠️ プロジェクトディレクトリが見つかりません: {state_mod.get_current_project_raw()}\n"
+                    f"⚠️ プロジェクトディレクトリが見つかりません: {effective}\n"
                     "ディレクトリが削除・移動された可能性があります。\n"
                     "collab_switch_project() で正しいパスを再設定してください。"
                 )
-            if not state_mod.get_current_project_raw().is_dir():
+            if not effective.is_dir():
                 return (
-                    f"⚠️ 設定パスがディレクトリではありません: {state_mod.get_current_project_raw()}\n"
+                    f"⚠️ 設定パスがディレクトリではありません: {effective}\n"
                     "collab_switch_project() で正しいパスを再設定してください。"
                 )
-            state_ok = (state_mod.get_current_project_raw() / "AI_STATE.json").exists()
+            state_ok = (effective / "AI_STATE.json").exists()
             return (
-                f"現在のプロジェクト: {state_mod.get_current_project_raw()}\n"
+                f"現在のプロジェクト: {effective}\n"
                 f"  状態ファイル: {'存在 ✅' if state_ok else '未作成 ⚠️（collab_switch_project で初期化してください）'}"
             )
     except RuntimeError as _pp_e:
@@ -204,7 +207,11 @@ def collab_version(project_path: str = '') -> str:
     """
     try:
         with state_mod.project_context(project_path):
-            project_path = str(state_mod.get_current_project_raw()) if state_mod.get_current_project_raw() else "（未設定）"
+            # ContextVar override を優先した有効プロジェクトパスを表示用に取得
+            try:
+                _display_proj = str(_get_project_dir())
+            except RuntimeError:
+                _display_proj = "（未設定）"
             try:
                 config_path     = str(_state_file())
             except RuntimeError:
@@ -222,7 +229,7 @@ def collab_version(project_path: str = '') -> str:
                 f"Python バージョン       : {sys.version.split()[0]}",
                 f"実行ファイル            : {sys.executable}",
                 "",
-                f"プロジェクトパス        : {project_path}",
+                f"プロジェクトパス        : {_display_proj}",
                 f"AI_STATE.json           : {config_path}",
                 f"cli_config.json         : {cli_config_path}",
             ]
@@ -1268,7 +1275,7 @@ def collab_checkpoint(message: str, to_ai: str = "", dry_run: bool = False, proj
 #region MCPツール — AI相談・議論
 
 @mcp.tool()
-def collab_consult(ai: str, question: str, save_result: bool = True) -> str:
+def collab_consult(ai: str, question: str, save_result: bool = True, project_path: str = '') -> str:
     """
     相手のAI（CLIバージョン）を一時的に呼び出して相談する。
 
@@ -1280,37 +1287,41 @@ def collab_consult(ai: str, question: str, save_result: bool = True) -> str:
         question: 相談・質問の内容
         save_result: 回答をメモとして状態に保存するか（デフォルト: True）
     """
-    if ai not in VALID_AI:
-        return f"エラー: ai は 'claude' または 'codex' を指定してください。"
-    err = _validate_input(question, "question")
-    if err:
-        return err
+    try:
+        with state_mod.project_context(project_path):
+            if ai not in VALID_AI:
+                return f"エラー: ai は 'claude' または 'codex' を指定してください。"
+            err = _validate_input(question, "question")
+            if err:
+                return err
 
-    response = _call_ai_cli(ai, _build_consult_prompt(question))
+            response = _call_ai_cli(ai, _build_consult_prompt(question))
 
-    save_failed = False
-    if save_result:
-        try:
-            short_q = question[:60] + ("…" if len(question) > 60 else "")
-            with _state_transaction() as state:
-                state["notes"].append({
-                    "timestamp": _now_iso(), "ai": state["current_ai"],
-                    "text": f"[{ai.upper()}に相談] {short_q}",
-                    "consult": {"question": question, "response": response},
-                })
-                caller_ai = state["current_ai"]
-            _append_session_log(caller_ai, f"{ai.upper()}CLIへの相談: {short_q}")
-        except Exception:
-            save_failed = True
+            save_failed = False
+            if save_result:
+                try:
+                    short_q = question[:60] + ("…" if len(question) > 60 else "")
+                    with _state_transaction() as state:
+                        state["notes"].append({
+                            "timestamp": _now_iso(), "ai": state["current_ai"],
+                            "text": f"[{ai.upper()}に相談] {short_q}",
+                            "consult": {"question": question, "response": response},
+                        })
+                        caller_ai = state["current_ai"]
+                    _append_session_log(caller_ai, f"{ai.upper()}CLIへの相談: {short_q}")
+                except Exception:
+                    save_failed = True
 
-    result = f"【{ai.upper()} CLI の回答】\n\n{response}"
-    if save_failed:
-        result += "\n\n⚠️ メモへの保存に失敗しました"
-    return result
+            result = f"【{ai.upper()} CLI の回答】\n\n{response}"
+            if save_failed:
+                result += "\n\n⚠️ メモへの保存に失敗しました"
+            return result
+    except RuntimeError as _pp_e:
+        return f"エラー: {_pp_e}"
 
 
 @mcp.tool()
-def collab_discuss(ai: str, topic: str, rounds: int = 2) -> str:
+def collab_discuss(ai: str, topic: str, rounds: int = 2, project_path: str = '') -> str:
     """
     相手のAI（CLIバージョン）と複数ラウンドの議論を行う。
     ラウンドごとにトークンを消費するため rounds は 2〜3 を推奨。
@@ -1320,55 +1331,59 @@ def collab_discuss(ai: str, topic: str, rounds: int = 2) -> str:
         topic: 議論するテーマ・問題
         rounds: 往復ラウンド数（デフォルト: 2、最大: 4）
     """
-    if ai not in VALID_AI:
-        return f"エラー: ai は 'claude' または 'codex' を指定してください。"
-    err = _validate_input(topic, "topic")
-    if err:
-        return err
-
-    rounds = min(max(rounds, 1), 4)
-    history: list[dict] = []
-    current_prompt = topic
-
-    for i in range(rounds):
-        context = _build_consult_prompt(current_prompt)
-        if history:
-            context += "\n\n---\n\n## これまでの議論の流れ\n"
-            for h in history:
-                context += f"\n**{h['speaker']}:** {h['text'][:400]}\n"
-        response = _call_ai_cli(ai, context)
-        history.append({"speaker": ai.upper(), "text": response})
-        if i + 1 < rounds:
-            current_prompt = (
-                f"以下の回答を踏まえて、さらに深掘りした質問や意見を述べてください:\n\n{response[:600]}"
-            )
-
-    result_lines = [f"【{ai.upper()} CLI との議論結果】（{rounds}ラウンド）", ""]
-    for j, h in enumerate(history, 1):
-        result_lines += [f"### ラウンド {j} — {h['speaker']}", "", h["text"], ""]
-    result = "\n".join(result_lines)
-
-    save_failed = False
     try:
-        short_topic = topic[:60] + ("…" if len(topic) > 60 else "")
-        with _state_transaction() as state:
-            state["notes"].append({
-                "timestamp": _now_iso(), "ai": state["current_ai"],
-                "text": f"[{ai.upper()}と議論] {short_topic}",
-                "discuss": {"topic": topic, "rounds": rounds, "history": history},
-            })
-            caller_ai = state["current_ai"]
-        _append_session_log(caller_ai, f"{ai.upper()}CLIとの議論: {short_topic}")
-    except Exception:
-        save_failed = True
+        with state_mod.project_context(project_path):
+            if ai not in VALID_AI:
+                return f"エラー: ai は 'claude' または 'codex' を指定してください。"
+            err = _validate_input(topic, "topic")
+            if err:
+                return err
 
-    if save_failed:
-        result += "\n⚠️ メモへの保存に失敗しました"
-    return result
+            rounds = min(max(rounds, 1), 4)
+            history: list[dict] = []
+            current_prompt = topic
+
+            for i in range(rounds):
+                context = _build_consult_prompt(current_prompt)
+                if history:
+                    context += "\n\n---\n\n## これまでの議論の流れ\n"
+                    for h in history:
+                        context += f"\n**{h['speaker']}:** {h['text'][:400]}\n"
+                response = _call_ai_cli(ai, context)
+                history.append({"speaker": ai.upper(), "text": response})
+                if i + 1 < rounds:
+                    current_prompt = (
+                        f"以下の回答を踏まえて、さらに深掘りした質問や意見を述べてください:\n\n{response[:600]}"
+                    )
+
+            result_lines = [f"【{ai.upper()} CLI との議論結果】（{rounds}ラウンド）", ""]
+            for j, h in enumerate(history, 1):
+                result_lines += [f"### ラウンド {j} — {h['speaker']}", "", h["text"], ""]
+            result = "\n".join(result_lines)
+
+            save_failed = False
+            try:
+                short_topic = topic[:60] + ("…" if len(topic) > 60 else "")
+                with _state_transaction() as state:
+                    state["notes"].append({
+                        "timestamp": _now_iso(), "ai": state["current_ai"],
+                        "text": f"[{ai.upper()}と議論] {short_topic}",
+                        "discuss": {"topic": topic, "rounds": rounds, "history": history},
+                    })
+                    caller_ai = state["current_ai"]
+                _append_session_log(caller_ai, f"{ai.upper()}CLIとの議論: {short_topic}")
+            except Exception:
+                save_failed = True
+
+            if save_failed:
+                result += "\n⚠️ メモへの保存に失敗しました"
+            return result
+    except RuntimeError as _pp_e:
+        return f"エラー: {_pp_e}"
 
 
 @mcp.tool()
-def collab_setup_cli(ai: str, command: str, args_before: list[str] = [], args_after: list[str] = []) -> str:
+def collab_setup_cli(ai: str, command: str, args_before: list[str] = [], args_after: list[str] = [], project_path: str = '') -> str:
     """
     CLI の呼び出し設定をカスタマイズして保存する。
     デフォルト設定で動かない場合に使う。
@@ -1379,41 +1394,45 @@ def collab_setup_cli(ai: str, command: str, args_before: list[str] = [], args_af
         args_before: プロンプトの前に渡す引数
         args_after: プロンプトの後に渡す引数
     """
-    # ai の検証
-    if ai not in VALID_AI:
-        return f"エラー: ai は 'claude' または 'codex' を指定してください。"
+    try:
+        with state_mod.project_context(project_path):
+            # ai の検証
+            if ai not in VALID_AI:
+                return f"エラー: ai は 'claude' または 'codex' を指定してください。"
 
-    # command の検証: ファイル名のステム（拡張子なし）が VALID_AI に含まれるもののみ許可
-    cmd_stem = Path(command).stem.lower()
-    if cmd_stem not in VALID_AI:
-        return (
-            f"エラー: command に設定できるのは 'claude' または 'codex' の実行ファイルのみです。\n"
-            f"指定値: {command}（ファイル名: {cmd_stem}）"
-        )
+            # command の検証: ファイル名のステム（拡張子なし）が VALID_AI に含まれるもののみ許可
+            cmd_stem = Path(command).stem.lower()
+            if cmd_stem not in VALID_AI:
+                return (
+                    f"エラー: command に設定できるのは 'claude' または 'codex' の実行ファイルのみです。\n"
+                    f"指定値: {command}（ファイル名: {cmd_stem}）"
+                )
 
-    # args の型検証
-    if not isinstance(args_before, list):
-        args_before = []
-    if not isinstance(args_after, list):
-        args_after = []
+            # args の型検証
+            if not isinstance(args_before, list):
+                args_before = []
+            if not isinstance(args_after, list):
+                args_after = []
 
-    cfg_file = _cli_config_file()
-    config = {}
-    if cfg_file.exists():
-        with open(cfg_file, "r", encoding="utf-8-sig") as f:
-            config = json.load(f)
+            cfg_file = _cli_config_file()
+            config = {}
+            if cfg_file.exists():
+                with open(cfg_file, "r", encoding="utf-8-sig") as f:
+                    config = json.load(f)
 
-    config[ai] = {"command": command, "args_before": args_before, "args_after": args_after}
-    _write_atomic(cfg_file, json.dumps(config, ensure_ascii=False, indent=2))
+            config[ai] = {"command": command, "args_before": args_before, "args_after": args_after}
+            _write_atomic(cfg_file, json.dumps(config, ensure_ascii=False, indent=2))
 
-    path = _resolve_cli_path(ai, command)
-    status = f"見つかりました: {path}" if path else "⚠ 見つかりません。パスを確認してください。"
-    return (
-        f"CLI設定を保存しました: {cfg_file}\n"
-        f"  AI      : {ai.upper()}\n"
-        f"  command : {command}  →  {status}\n"
-        f"  実行例  : {command} {' '.join(args_before)} \"<プロンプト>\" {' '.join(args_after)}"
-    )
+            path = _resolve_cli_path(ai, command)
+            status = f"見つかりました: {path}" if path else "⚠ 見つかりません。パスを確認してください。"
+            return (
+                f"CLI設定を保存しました: {cfg_file}\n"
+                f"  AI      : {ai.upper()}\n"
+                f"  command : {command}  →  {status}\n"
+                f"  実行例  : {command} {' '.join(args_before)} \"<プロンプト>\" {' '.join(args_after)}"
+            )
+    except RuntimeError as _pp_e:
+        return f"エラー: {_pp_e}"
 
 #endregion
 
@@ -1628,6 +1647,7 @@ def collab_request_review(
     focus:       list[str] = [],
     scope:       str = "",
     save_result: bool = True,
+    project_path: str = '',
 ) -> str:
     """
     相手AIにコードレビューまたは設計レビューを依頼する。
@@ -1639,43 +1659,47 @@ def collab_request_review(
         scope:       レビュー対象の説明（ファイル名・機能名など）
         save_result: 結果をメモとして保存するか（デフォルト: True）
     """
-    if ai not in VALID_AI:
-        return f"エラー: ai は 'claude' または 'codex' を指定してください。"
+    try:
+        with state_mod.project_context(project_path):
+            if ai not in VALID_AI:
+                return f"エラー: ai は 'claude' または 'codex' を指定してください。"
 
-    focus_text = "・".join(focus) if focus else "全般"
-    scope_text = scope or "現在の実装全体"
-    question = (
-        f"[レビュー依頼]\n"
-        f"対象スコープ: {scope_text}\n"
-        f"重点事項: {focus_text}\n\n"
-        f"問題点・改善点・リスクを指摘してください。"
-    )
+            focus_text = "・".join(focus) if focus else "全般"
+            scope_text = scope or "現在の実装全体"
+            question = (
+                f"[レビュー依頼]\n"
+                f"対象スコープ: {scope_text}\n"
+                f"重点事項: {focus_text}\n\n"
+                f"問題点・改善点・リスクを指摘してください。"
+            )
 
-    err = _validate_input(question, "question")
-    if err:
-        return err
+            err = _validate_input(question, "question")
+            if err:
+                return err
 
-    response    = _call_ai_cli(ai, _build_consult_prompt(question))
-    save_failed = False
+            response    = _call_ai_cli(ai, _build_consult_prompt(question))
+            save_failed = False
 
-    if save_result:
-        try:
-            label = f"[{ai.upper()}にレビュー依頼] {scope_text[:60]}"
-            with _state_transaction() as state:
-                state["notes"].append({
-                    "timestamp": _now_iso(), "ai": state["current_ai"],
-                    "text":    label,
-                    "consult": {"question": question, "response": response},
-                })
-                caller_ai = state["current_ai"]
-            _append_session_log(caller_ai, label)
-        except Exception:
-            save_failed = True
+            if save_result:
+                try:
+                    label = f"[{ai.upper()}にレビュー依頼] {scope_text[:60]}"
+                    with _state_transaction() as state:
+                        state["notes"].append({
+                            "timestamp": _now_iso(), "ai": state["current_ai"],
+                            "text":    label,
+                            "consult": {"question": question, "response": response},
+                        })
+                        caller_ai = state["current_ai"]
+                    _append_session_log(caller_ai, label)
+                except Exception:
+                    save_failed = True
 
-    result = f"【{ai.upper()} CLI のレビュー】\n\n{response}"
-    if save_failed:
-        result += "\n\n⚠️ メモへの保存に失敗しました"
-    return result
+            result = f"【{ai.upper()} CLI のレビュー】\n\n{response}"
+            if save_failed:
+                result += "\n\n⚠️ メモへの保存に失敗しました"
+            return result
+    except RuntimeError as _pp_e:
+        return f"エラー: {_pp_e}"
 
 
 @mcp.tool()
@@ -2144,7 +2168,7 @@ def _print_help(version_only: bool = False) -> None:
 
 
 
-_VERSION = "1.0.20"
+_VERSION = "1.0.21"
 
 # ヘルプテキスト（AIが読むことを想定して日本語で詳述）
 _HELP_TEXT = f"""\
