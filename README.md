@@ -18,7 +18,7 @@ Claude Desktop と Codex Desktop が MCP を通じて状態を共有し、セッ
 
 > **設計上の制約:** MCP サーバーは Desktop アプリごとに独立したプロセスとして起動されます。  
 > **1 プロセス = 1 セッションデフォルトプロジェクト** です。`collab_switch_project()` でセッション既定を設定し、個別ツール呼び出しでは `project_path=` で別プロジェクトを一時指定できます。  
-> 詳細・復旧手順 → [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md)
+> 詳細・復旧手順 → リポジトリ内 `docs/TROUBLESHOOTING.md` を参照
 
 ---
 
@@ -232,7 +232,7 @@ collab_checkpoint("認証の実装完了。次はテストを書く必要あり"
 
 ## ライセンス
 
-MIT License — 詳細は [LICENSE](LICENSE) を参照。
+MIT License
 
 ---
 
@@ -478,10 +478,10 @@ Run `collab_doctor()` first if something seems wrong:
 collab_doctor()
 ```
 
-For common errors and recovery steps, see **[docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md)**.
+For common errors and recovery steps, see `docs/TROUBLESHOOTING.md` in the repository.
 
 ---
 
 ## License
 
-MIT License — see [LICENSE](LICENSE) for details.
+MIT License
