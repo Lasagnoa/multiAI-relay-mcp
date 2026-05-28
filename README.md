@@ -30,7 +30,7 @@ Claude Desktop と Codex Desktop が MCP を通じて状態を共有し、セッ
 ```json
 "multiai-relay-mcp": {
   "command": "uvx",
-  "args": ["--index-url", "https://test.pypi.org/simple/", "--extra-index-url", "https://pypi.org/simple/", "multiai-relay-mcp==1.0.10"]
+  "args": ["--index-url", "https://test.pypi.org/simple/", "--extra-index-url", "https://pypi.org/simple/", "multiai-relay-mcp==1.0.11"]
 }
 ```
 
@@ -44,12 +44,12 @@ Claude Desktop と Codex Desktop が MCP を通じて状態を共有し、セッ
 ```toml
 [mcp_servers.multiai-relay-mcp]
 command = 'uvx'
-args = ['--index-url', 'https://test.pypi.org/simple/', '--extra-index-url', 'https://pypi.org/simple/', 'multiai-relay-mcp==1.0.10']
+args = ['--index-url', 'https://test.pypi.org/simple/', '--extra-index-url', 'https://pypi.org/simple/', 'multiai-relay-mcp==1.0.11']
 ```
 
 > 追加後は Codex Desktop を再起動。
 
-> **バージョンアップ手順:** 設定の `==1.0.10` を新バージョンに書き換え → `clear-multiai-cache.sh` 実行（またはキャッシュ手動削除）→ Desktop 再起動 → `collab_summary()` でバージョン確認。
+> **バージョンアップ手順:** 設定の `==1.0.11` を新バージョンに書き換え → `clear-multiai-cache.sh` 実行（またはキャッシュ手動削除）→ Desktop 再起動 → `collab_summary()` でバージョン確認。
 
 ---
 
@@ -107,11 +107,15 @@ collab_checkpoint("認証の実装完了。次はテストを書く必要あり"
 | `collab_add_pending_task(title)` | 保留タスクを追加 |
 | `collab_close_pending_task(task_id, note?)` | 保留タスクを完了扱いに |
 | `collab_complete_task(note?)` | 現在のタスクを完了済みにする（新タスクなしで完了させる場合） |
-| `collab_generate_handoff(to_ai)` | 引き継ぎ文書を生成して担当AIを切り替え |
-| `collab_checkpoint(message, to_ai?)` | メモ追加と引き継ぎを一度に実行 |
+| `collab_generate_handoff(to_ai, dry_run?)` | 引き継ぎ文書を生成して担当AIを切り替え（dry_run でプレビューのみ） |
+| `collab_checkpoint(message, to_ai?, dry_run?)` | メモ追加と引き継ぎを一度に実行（dry_run でプレビューのみ） |
 | `collab_consult(ai, question)` | 相手AIのCLIに相談（要CLI設定） |
 | `collab_discuss(ai, topic)` | 相手AIと複数ラウンド議論（要CLI設定） |
+| `collab_request_review(ai, focus?, scope?)` | 相手AIにコードレビューを依頼（consult の薄いラッパー） |
 | `collab_setup_cli(ai, command, ...)` | CLIパス・引数設定をカスタマイズ |
+| `collab_version()` | MCPサーバーと実行環境のバージョン情報を表示 |
+| `collab_doctor(check_cli?, check_state?, ...)` | MCPサーバーと環境の健全性を診断（OK/WARN/ERR） |
+| `collab_timeline(limit?, since?, actor?, event_type?)` | プロジェクトの更新イベントを時系列で表示 |
 | `collab_cleanup_sessions(keep_per_ai?)` | 古いセッションログを削除 |
 | `collab_current_project()` | 現在のプロジェクトパスを表示 |
 
@@ -172,7 +176,7 @@ Add to `%APPDATA%\Claude\claude_desktop_config.json` (Windows) or `~/Library/App
 ```json
 "multiai-relay-mcp": {
   "command": "uvx",
-  "args": ["--index-url", "https://test.pypi.org/simple/", "--extra-index-url", "https://pypi.org/simple/", "multiai-relay-mcp==1.0.10"]
+  "args": ["--index-url", "https://test.pypi.org/simple/", "--extra-index-url", "https://pypi.org/simple/", "multiai-relay-mcp==1.0.11"]
 }
 ```
 
@@ -186,12 +190,12 @@ Add to `~/.codex/config.toml`:
 ```toml
 [mcp_servers.multiai-relay-mcp]
 command = 'uvx'
-args = ['--index-url', 'https://test.pypi.org/simple/', '--extra-index-url', 'https://pypi.org/simple/', 'multiai-relay-mcp==1.0.10']
+args = ['--index-url', 'https://test.pypi.org/simple/', '--extra-index-url', 'https://pypi.org/simple/', 'multiai-relay-mcp==1.0.11']
 ```
 
 > Restart Codex Desktop after editing.
 
-> **Upgrading:** Change `==1.0.10` to the new version in your config → run `clear-multiai-cache.sh` (or delete cached `.rkyv` files manually) → restart Desktop → confirm with `collab_summary()`.
+> **Upgrading:** Change `==1.0.11` to the new version in your config → run `clear-multiai-cache.sh` (or delete cached `.rkyv` files manually) → restart Desktop → confirm with `collab_summary()`.
 
 ---
 
@@ -249,11 +253,15 @@ A `HANDOFF.md` is generated. In a new Codex Desktop session, say: "Please read H
 | `collab_add_pending_task(title)` | Add a pending task |
 | `collab_close_pending_task(task_id, note?)` | Mark pending task as done |
 | `collab_complete_task(note?)` | Mark current task as done (without starting a new one) |
-| `collab_generate_handoff(to_ai)` | Generate handoff doc and switch AI |
-| `collab_checkpoint(message, to_ai?)` | Add note + generate handoff in one call |
+| `collab_generate_handoff(to_ai, dry_run?)` | Generate handoff doc and switch AI (dry_run for preview only) |
+| `collab_checkpoint(message, to_ai?, dry_run?)` | Add note + generate handoff in one call (dry_run for preview only) |
 | `collab_consult(ai, question)` | Consult the other AI's CLI (requires CLI setup) |
 | `collab_discuss(ai, topic)` | Multi-round discussion with the other AI's CLI |
+| `collab_request_review(ai, focus?, scope?)` | Request a code/design review from the other AI |
 | `collab_setup_cli(ai, command, ...)` | Customize CLI path and arguments |
+| `collab_version()` | Show MCP server and runtime version info |
+| `collab_doctor(check_cli?, check_state?, ...)` | Diagnose MCP server and environment health (OK/WARN/ERR) |
+| `collab_timeline(limit?, since?, actor?, event_type?)` | Show project events in chronological order |
 | `collab_cleanup_sessions(keep_per_ai?)` | Delete old session logs |
 | `collab_current_project()` | Show current project path |
 

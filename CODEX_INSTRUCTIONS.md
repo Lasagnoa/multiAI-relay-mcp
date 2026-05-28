@@ -28,10 +28,10 @@
 ```toml
 [mcp_servers.multiai-relay-mcp]
 command = 'uvx'
-args = ['--index-url', 'https://test.pypi.org/simple/', '--extra-index-url', 'https://pypi.org/simple/', 'multiai-relay-mcp==1.0.10']
+args = ['--index-url', 'https://test.pypi.org/simple/', '--extra-index-url', 'https://pypi.org/simple/', 'multiai-relay-mcp==1.0.11']
 ```
 
-> **バージョンアップ手順:** `==1.0.10` を新バージョンに書き換え → `clear-multiai-cache.sh` 実行 → Codex Desktop 再起動 → `collab_summary()` で確認。
+> **バージョンアップ手順:** `==1.0.11` を新バージョンに書き換え → `clear-multiai-cache.sh` 実行 → Codex Desktop 再起動 → `collab_summary()` で確認。
 
 > `uvx` のフルパスが必要な場合は `where uvx`（Windows）または `which uvx`（Mac/Linux）で確認。
 > 追加後は Codex Desktop を再起動。

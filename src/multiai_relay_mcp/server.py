@@ -56,6 +56,9 @@ MODE_LABELS: dict[str, str] = {
 # 入力文字列の最大長（プロンプトインジェクション・状態肥大化対策）
 _MAX_INPUT_LEN = 2000
 
+# 状態スキーマのバージョン（collab_version / collab_doctor で参照）
+_STATE_SCHEMA_VERSION = "1.0"
+
 # 状態ファイルの必須キーとデフォルト値（スキーマ検証・補完用）
 _STATE_DEFAULTS: dict = {
     "version":                 "1.0",
@@ -524,6 +527,139 @@ def collab_current_project() -> str:
 
 #endregion
 
+#region MCPツール — 診断・情報
+
+@mcp.tool()
+def collab_version() -> str:
+    """
+    MCPサーバーと実行環境のバージョン情報を返す。
+    """
+    project_path = str(_current_project) if _current_project else "（未設定）"
+    try:
+        config_path     = str(_state_file())
+    except RuntimeError:
+        config_path     = "（未設定）"
+    try:
+        cli_config_path = str(_cli_config_file())
+    except RuntimeError:
+        cli_config_path = "（未設定）"
+
+    lines = [
+        f"multiai-relay-mcp v{_VERSION}",
+        "",
+        f"パッケージバージョン    : {_VERSION}",
+        f"状態スキーマバージョン  : {_STATE_SCHEMA_VERSION}",
+        f"Python バージョン       : {sys.version.split()[0]}",
+        f"実行ファイル            : {sys.executable}",
+        "",
+        f"プロジェクトパス        : {project_path}",
+        f"AI_STATE.json           : {config_path}",
+        f"cli_config.json         : {cli_config_path}",
+    ]
+    return "\n".join(lines)
+
+
+@mcp.tool()
+def collab_doctor(
+    check_cli:     bool = True,
+    check_state:   bool = True,
+    check_lock:    bool = True,
+    check_ai_call: bool = False,
+) -> str:
+    """
+    MCPサーバーと実行環境の健全性を診断する。
+
+    Args:
+        check_cli:     CLIコマンドの存在確認（デフォルト: True）
+        check_state:   AI_STATE.json の整合性確認（デフォルト: True）
+        check_lock:    ロックファイルの状態確認（デフォルト: True）
+        check_ai_call: AI CLI 呼び出し確認（高コスト、デフォルト: False）
+    """
+    ok_items:   list[str] = []
+    warn_items: list[str] = []
+    err_items:  list[str] = []
+
+    def ok(msg: str)   -> None: ok_items.append(f"✅ OK   {msg}")
+    def warn(msg: str) -> None: warn_items.append(f"⚠️ WARN {msg}")
+    def err(msg: str)  -> None: err_items.append(f"❌ ERR  {msg}")
+
+    # プロジェクトフォルダ確認
+    if _current_project is None:
+        warn("プロジェクト未設定 — collab_switch_project() を呼んでください")
+    elif not _current_project.exists():
+        err(f"プロジェクトフォルダが存在しない: {_current_project}")
+    else:
+        ok(f"プロジェクトフォルダ: {_current_project}")
+
+    # 状態ファイル確認
+    if check_state and _current_project and _current_project.exists():
+        sf = _state_file()
+        if not sf.exists():
+            warn("AI_STATE.json が未作成 — collab_switch_project() で新規作成できます")
+        else:
+            try:
+                state = _load_state()
+                ok(
+                    f"AI_STATE.json 正常"
+                    f" (担当: {state.get('current_ai','?').upper()}"
+                    f", セッション: #{state.get('session_count','?')})"
+                )
+            except Exception as e:
+                err(f"AI_STATE.json 読み込み失敗: {e}")
+
+    # ロックファイル確認
+    if check_lock and _current_project and _current_project.exists():
+        lock_file = _get_project_dir() / "AI_STATE.lock"
+        if lock_file.exists():
+            try:
+                data = json.loads(lock_file.read_text(encoding="utf-8"))
+                pid  = data.get("pid", 0)
+                if _pid_exists(pid):
+                    warn(f"ロックファイルあり (PID {pid} は生存中) — 別プロセスが書き込み中の可能性")
+                else:
+                    warn(f"古いロックファイルあり (PID {pid} は不在) — 次回書き込み時に自動解除されます")
+            except Exception:
+                warn("ロックファイルあり（解析不能）— 手動削除を検討: AI_STATE.lock")
+        else:
+            ok("ロックファイルなし（正常）")
+
+    # CLI コマンド確認
+    if check_cli:
+        config = _load_cli_config()
+        for ai_name in VALID_AI:
+            cfg  = config.get(ai_name, {})
+            cmd  = cfg.get("command", DEFAULT_CLI_CONFIG[ai_name]["command"])
+            path = _resolve_cli_path(ai_name, cmd)
+            if path:
+                ok(f"{ai_name.upper()} CLI: {path}")
+            else:
+                warn(f"{ai_name.upper()} CLI 未検出 ({cmd}) — collab_setup_cli() で設定してください")
+
+    # AI 呼び出し確認（高コスト・オプション）
+    if check_ai_call:
+        for ai_name in VALID_AI:
+            config = _load_cli_config()
+            cfg    = config.get(ai_name, {})
+            cmd    = cfg.get("command", DEFAULT_CLI_CONFIG[ai_name]["command"])
+            path   = _resolve_cli_path(ai_name, cmd)
+            if not path:
+                warn(f"{ai_name.upper()} CLI 呼び出しテストをスキップ（コマンド未検出）")
+                continue
+            try:
+                result = _call_ai_cli(ai_name, "ヘルスチェックです。「OK」とだけ答えてください。", timeout=30)
+                if result.startswith("エラー"):
+                    warn(f"{ai_name.upper()} CLI 応答エラー: {result[:80]}")
+                else:
+                    ok(f"{ai_name.upper()} CLI 呼び出し成功")
+            except Exception as e:
+                err(f"{ai_name.upper()} CLI 呼び出し例外: {e}")
+
+    summary  = f"OK: {len(ok_items)}件  WARN: {len(warn_items)}件  ERR: {len(err_items)}件"
+    all_items = ok_items + warn_items + err_items
+    return f"# 診断結果 — {summary}\n" + "\n".join(all_items)
+
+#endregion
+
 #region MCPツール — 状態管理
 
 @mcp.tool()
@@ -908,15 +1044,31 @@ def collab_complete_task(note: str = "") -> str:
 
 
 @mcp.tool()
-def collab_generate_handoff(to_ai: str) -> str:
+def collab_generate_handoff(to_ai: str, dry_run: bool = False) -> str:
     """
     ハンドオフドキュメントを生成して担当AIを切り替える。
 
     Args:
         to_ai: 引き継ぎ先のAI。"claude" または "codex"
+        dry_run: True にすると実際の書き込み・担当切り替えを行わずプレビューのみ返す
     """
     if to_ai not in VALID_AI:
         return f"エラー: AIは 'claude' または 'codex' を指定してください。"
+
+    # dry_run: 状態変更・ファイル書き込みなしでプレビューのみ返す
+    if dry_run:
+        state   = _load_state()
+        from_ai = state["current_ai"]
+        preview = _build_handoff(state, from_ai, to_ai)
+        return json.dumps({
+            "dry_run":          True,
+            "would_write_path": str(_handoff_file()),
+            "from_ai":          from_ai,
+            "target_ai":        to_ai,
+            "preview_chars":    len(preview),
+            "preview":          preview[:800] + ("…（以降省略）" if len(preview) > 800 else ""),
+            "warnings":         [],
+        }, ensure_ascii=False, indent=2)
 
     with _state_transaction() as state:
         from_ai = state["current_ai"]
@@ -939,13 +1091,14 @@ def collab_generate_handoff(to_ai: str) -> str:
 
 
 @mcp.tool()
-def collab_checkpoint(message: str, to_ai: str = "") -> str:
+def collab_checkpoint(message: str, to_ai: str = "", dry_run: bool = False) -> str:
     """
     作業メモの追加とハンドオフ生成を一度に行う。
 
     Args:
         message: 引き継ぎに残す進捗・次の作業内容
         to_ai: 引き継ぎ先。"claude" / "codex"。省略時は現在担当でないAI。
+        dry_run: True にするとメモ追加・ファイル書き込み・担当切り替えを行わずプレビューのみ返す
     """
     err = _validate_input(message, "message")
     if err:
@@ -953,6 +1106,25 @@ def collab_checkpoint(message: str, to_ai: str = "") -> str:
     # issue-014: to_ai が明示指定されていて不正な場合は transaction 外で弾く
     if to_ai and to_ai not in VALID_AI:
         return "エラー: AIは 'claude' または 'codex' を指定してください。"
+
+    # dry_run: 状態変更・ファイル書き込みなしでプレビューのみ返す
+    if dry_run:
+        state     = _load_state()
+        from_ai   = state["current_ai"]
+        target_ai = to_ai or ("claude" if from_ai == "codex" else "codex")
+        # メモを仮追加したコピーでプレビュー（実際の state には書き込まない）
+        preview_state = copy.deepcopy(state)
+        preview_state["notes"].append({"timestamp": _now_iso(), "ai": from_ai, "text": message})
+        preview = _build_handoff(preview_state, from_ai, target_ai)
+        return json.dumps({
+            "dry_run":          True,
+            "would_write_path": str(_handoff_file()),
+            "from_ai":          from_ai,
+            "target_ai":        target_ai,
+            "preview_chars":    len(preview),
+            "preview":          preview[:800] + ("…（以降省略）" if len(preview) > 800 else ""),
+            "warnings":         [],
+        }, ensure_ascii=False, indent=2)
 
     with _state_transaction() as state:
         from_ai = state["current_ai"]
@@ -1411,6 +1583,166 @@ def collab_search(query: str) -> str:
 
 
 @mcp.tool()
+def collab_timeline(
+    limit:      int = 20,
+    since:      str = "",
+    actor:      str = "",
+    event_type: str = "",
+) -> str:
+    """
+    プロジェクトの更新イベントを時系列で返す。
+
+    Args:
+        limit:      最大表示件数（デフォルト: 20、最大: 100）
+        since:      この日時以降のみ表示（ISO形式: 2026-05-01T00:00）
+        actor:      AIフィルター（"claude" / "codex" / "" で全員）
+        event_type: イベント種別フィルター
+                    "note" / "decision" / "issue" / "issue_resolved" /
+                    "task" / "task_done" / "pending" / "pending_done" / "" で全種別
+    """
+    state = _load_state()
+
+    # 全イベントを収集
+    events: list[dict] = []
+
+    def _add(ts: str, kind: str, ai: str, label: str) -> None:
+        if ts:
+            events.append({"ts": ts, "kind": kind, "ai": ai.lower(), "label": label})
+
+    for n in state.get("notes", []):
+        _add(n.get("timestamp", ""), "note", n.get("ai", "?"), n.get("text", "")[:100])
+
+    for d in state.get("key_decisions", []):
+        _add(d.get("timestamp", ""), "decision", d.get("ai", "?"), d.get("title", "")[:80])
+
+    for iss in state.get("known_issues", []):
+        if isinstance(iss, dict):
+            _add(iss.get("timestamp", ""), "issue", iss.get("ai", "?"),
+                 f"[{iss.get('id','?')}] {iss.get('text','')[:80]}")
+
+    for iss in state.get("resolved_issues", []):
+        if isinstance(iss, dict):
+            _add(
+                iss.get("resolved_at", iss.get("timestamp", "")),
+                "issue_resolved",
+                iss.get("resolved_by", "?"),
+                f"[{iss.get('id','?')}] 解決: {iss.get('text','')[:60]}",
+            )
+
+    ct = state.get("current_task")
+    if ct:
+        _add(ct.get("started_at", ""), "task", ct.get("started_by", "?"),
+             f"[{ct.get('id','?')}] {ct.get('title','')[:60]}")
+
+    for t in state.get("completed_tasks", []):
+        _add(t.get("completed_at", t.get("started_at", "")), "task_done",
+             t.get("started_by", "?"),
+             f"[{t.get('id','?')}] 完了: {t.get('title','')[:60]}")
+
+    for t in state.get("pending_tasks", []):
+        _add(t.get("added_at", ""), "pending", t.get("added_by", "?"),
+             f"[{t.get('id','?')}] {t.get('title','')[:60]}")
+
+    for t in state.get("completed_pending_tasks", []):
+        _add(t.get("completed_at", ""), "pending_done", t.get("added_by", "?"),
+             f"[{t.get('id','?')}] 完了: {t.get('title','')[:60]}")
+
+    # 降順ソート
+    events.sort(key=lambda e: e["ts"], reverse=True)
+
+    # フィルタリング
+    if since:
+        events = [e for e in events if e["ts"] >= since]
+    if actor:
+        events = [e for e in events if e["ai"] == actor.lower()]
+    if event_type:
+        events = [e for e in events if e["kind"] == event_type]
+
+    # 件数制限
+    limit = max(1, min(limit, 100))
+    events = events[:limit]
+
+    if not events:
+        return "（表示できるイベントがありません）"
+
+    # 種別ラベル
+    KIND_LABELS: dict[str, str] = {
+        "note":          "📝 メモ    ",
+        "decision":      "📌 決定    ",
+        "issue":         "⚠️  問題    ",
+        "issue_resolved":"✅ 問題解決",
+        "task":          "🔧 タスク  ",
+        "task_done":     "✅ タスク完",
+        "pending":       "⏳ 保留    ",
+        "pending_done":  "✅ 保留完了",
+    }
+
+    lines = [f"# タイムライン（{len(events)}件）", ""]
+    for e in events:
+        kind_label = KIND_LABELS.get(e["kind"], e["kind"])
+        ts = e["ts"][:16] if len(e["ts"]) >= 16 else e["ts"]
+        lines.append(f"{ts}  {kind_label}  [{e['ai'].upper()}]  {e['label']}")
+
+    return "\n".join(lines)
+
+
+@mcp.tool()
+def collab_request_review(
+    ai:          str,
+    focus:       list[str] = [],
+    scope:       str = "",
+    save_result: bool = True,
+) -> str:
+    """
+    相手AIにコードレビューまたは設計レビューを依頼する。
+    collab_consult の薄いラッパー。
+
+    Args:
+        ai:          レビュアーAI。"claude" または "codex"
+        focus:       レビューの重点事項リスト（例: ["セキュリティ", "パフォーマンス"]）
+        scope:       レビュー対象の説明（ファイル名・機能名など）
+        save_result: 結果をメモとして保存するか（デフォルト: True）
+    """
+    if ai not in VALID_AI:
+        return f"エラー: ai は 'claude' または 'codex' を指定してください。"
+
+    focus_text = "・".join(focus) if focus else "全般"
+    scope_text = scope or "現在の実装全体"
+    question = (
+        f"[レビュー依頼]\n"
+        f"対象スコープ: {scope_text}\n"
+        f"重点事項: {focus_text}\n\n"
+        f"問題点・改善点・リスクを指摘してください。"
+    )
+
+    err = _validate_input(question, "question")
+    if err:
+        return err
+
+    response    = _call_ai_cli(ai, _build_consult_prompt(question))
+    save_failed = False
+
+    if save_result:
+        try:
+            label = f"[{ai.upper()}にレビュー依頼] {scope_text[:60]}"
+            with _state_transaction() as state:
+                state["notes"].append({
+                    "timestamp": _now_iso(), "ai": state["current_ai"],
+                    "text":    label,
+                    "consult": {"question": question, "response": response},
+                })
+                caller_ai = state["current_ai"]
+            _append_session_log(caller_ai, label)
+        except Exception:
+            save_failed = True
+
+    result = f"【{ai.upper()} CLI のレビュー】\n\n{response}"
+    if save_failed:
+        result += "\n\n⚠️ メモへの保存に失敗しました"
+    return result
+
+
+@mcp.tool()
 def collab_summary() -> str:
     """
     現在の状態をコンパクトな4行で表示する。
@@ -1508,7 +1840,7 @@ def _print_help(version_only: bool = False) -> None:
 
 
 
-_VERSION = "1.0.10"
+_VERSION = "1.0.11"
 
 # ヘルプテキスト（AIが読むことを想定して日本語で詳述）
 _HELP_TEXT = f"""\
@@ -1541,11 +1873,15 @@ MCPツール一覧（Claude Desktop / Codex Desktop から自動呼び出し）:
   collab_add_pending_task   未着手タスクを追加する
   collab_close_pending_task 完了した保留タスクを一覧から取り除く
   collab_complete_task      現在のタスクを完了済みにする（新タスクなしで完了させる場合）
-  collab_generate_handoff   引き継ぎ文書（HANDOFF.md）を生成する
-  collab_checkpoint         メモ追加と引き継ぎ文書生成を一度に行う
+  collab_generate_handoff   引き継ぎ文書（HANDOFF.md）を生成する（dry_run オプションあり）
+  collab_checkpoint         メモ追加と引き継ぎ文書生成を一度に行う（dry_run オプションあり）
   collab_consult            相手AIのCLIを呼び出して質問・相談する
   collab_discuss            相手AIと複数ターンの議論を行う
+  collab_request_review     相手AIにコードレビューを依頼する（consult の薄いラッパー）
   collab_setup_cli          AIのCLIパス・引数設定をカスタマイズする
+  collab_version            MCPサーバーと実行環境のバージョン情報を返す
+  collab_doctor             MCPサーバーと実行環境の健全性を診断する
+  collab_timeline           プロジェクトの更新イベントを時系列で返す
   collab_cleanup_sessions   古いセッションログを削除する
 
 プロジェクトの切り替え:
