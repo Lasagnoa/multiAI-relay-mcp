@@ -116,6 +116,7 @@ def collab_switch_project(project_path: str, project_name: str = "") -> str:
             return t("switch.not_found", path=path)
         state_mod.set_current_project(path)
         initial_state = {
+            "version":      _STATE_SCHEMA_VERSION,  # collab_doctor の raw JSON 検査で警告が出ないよう明示
             "project_name": project_name,
             "current_ai": "claude",
             "mode": "plan",
@@ -527,9 +528,9 @@ def collab_doctor(
 
             #region CLI コマンド確認
             if check_cli:
-                config = _load_cli_config()
+                _cli_config = _load_cli_config()
                 for ai_name in VALID_AI:
-                    cfg  = config.get(ai_name, {})
+                    cfg  = _cli_config.get(ai_name, {})
                     cmd  = cfg.get("command", DEFAULT_CLI_CONFIG[ai_name]["command"])
                     path = _resolve_cli_path(ai_name, cmd)
                     if path:
@@ -1704,6 +1705,9 @@ def collab_timeline(
             events.sort(key=lambda e: e["ts"], reverse=True)
 
             # フィルタリング
+            # since の簡易形式チェック（ISO 8601 先頭10文字 YYYY-MM-DD が期待値）
+            if since and not re.match(r'^\d{4}-\d{2}-\d{2}', since):
+                return t("timeline.err_since_format")
             if since:
                 events = [e for e in events if e["ts"] >= since]
             if actor:
@@ -1887,7 +1891,7 @@ def collab_cleanup_history(
     """
     古いメモ・完了タスクを整理してAI_STATE.jsonをスリムにする。
 
-    넘치는 notes / completed_tasks を AI_STATE.archive.json にアーカイブし、
+    古い notes / completed_tasks は AI_STATE.archive.json にアーカイブし、
     状態ファイルを指定件数以内に保つ。
 
     Args:

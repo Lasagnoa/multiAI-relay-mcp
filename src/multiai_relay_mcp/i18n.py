@@ -500,6 +500,7 @@ _STRINGS: dict[str, dict[str, str]] = {
         "search.pending_done":"[完了保留] [{id}] {title} ({ts})",
 
         # ── collab_timeline ───────────────────────────────────────────────
+        "timeline.err_since_format": "since の形式が不正です。ISO 8601 形式（例: 2026-05-01 または 2026-05-01T00:00）で指定してください。",
         "timeline.empty":          "（表示できるイベントがありません）",
         "timeline.header":         "# タイムライン（{count}件）",
         "timeline.kind.note":      "📝 メモ    ",
@@ -1081,6 +1082,7 @@ _STRINGS: dict[str, dict[str, str]] = {
         "search.pending_done":"[Done Pending] [{id}] {title} ({ts})",
 
         # ── collab_timeline ───────────────────────────────────────────────
+        "timeline.err_since_format": "Invalid 'since' format. Use ISO 8601 (e.g. 2026-05-01 or 2026-05-01T00:00).",
         "timeline.empty":          "(No events to display)",
         "timeline.header":         "# Timeline ({count} events)",
         "timeline.kind.note":      "📝 Note    ",
