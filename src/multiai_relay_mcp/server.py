@@ -1084,7 +1084,7 @@ def collab_record_file(file_path: str, project_path: str = '') -> str:
             err = _validate_input(file_path, "file_path")
             if err:
                 return err
-            if any(c in file_path for c in ("\n", "\r", "\0")):
+            if any(c in file_path for c in ("\n", "\r", "\t", "\0")):
                 return t("record_file.err_control")
 
             # issue-014: current_task チェックを transaction 外で行い、
@@ -1840,13 +1840,15 @@ def collab_cleanup_sessions(keep_per_ai: int = 5, project_path: str = '') -> str
                     deleted.append(log_file.name)
 
             if not deleted:
-                summary_str = "  " + "、".join(
+                sep = t("cleanup_sessions.separator")
+                summary_str = "  " + sep.join(
                     t("cleanup_sessions.summary_item", AI=ai_n.upper(), count=kept[ai_n])
                     for ai_n in VALID_AI
                 )
                 return t("cleanup_sessions.no_target", keep=keep_per_ai, summary=summary_str)
 
-            kept_str = "  " + "、".join(
+            sep = t("cleanup_sessions.separator")
+            kept_str = "  " + sep.join(
                 t("cleanup_sessions.kept_item", AI=ai_n.upper(), count=kept[ai_n])
                 for ai_n in VALID_AI
             )
@@ -1903,31 +1905,33 @@ def collab_cleanup_history(
                          tasks=tasks_total, tasks_after=tasks_total - tasks_trim, tasks_trim=tasks_trim,
                          archive_dest=archive_dest)
 
-            # アーカイブ対象を確定
-            archived_notes = state["notes"][:notes_trim]
-            archived_tasks = state["completed_tasks"][:tasks_trim]
-
-            if archive and (archived_notes or archived_tasks):
-                # AI_STATE.archive.json を読み込み（なければ新規）
-                af = _archive_file()
-                if af.exists():
-                    try:
-                        with open(af, "r", encoding="utf-8-sig") as f:
-                            arc = json.load(f)
-                    except Exception:
-                        arc = {"notes": [], "completed_tasks": []}
-                else:
-                    arc = {"notes": [], "completed_tasks": []}
-
-                arc.setdefault("notes", []).extend(archived_notes)
-                arc.setdefault("completed_tasks", []).extend(archived_tasks)
-                arc["last_archived"] = _now_iso()
-
-                # アーカイブファイルを原子的に書き込む
-                _write_atomic(af, json.dumps(arc, ensure_ascii=False, indent=2))
-
-            # 状態を更新（古いレコードを削除）
+            # 状態を更新（古いレコードを削除）+ アーカイブ
+            # アーカイブ書き込みも _state_transaction 内で行い、
+            # AI_STATE.lock によって AI_STATE.archive.json への並行書き込みを防ぐ（TOCTOU対策）
             with _state_transaction() as st:
+                # ロック取得後に対象を再確定する（外側の state との差分を吸収）
+                archived_notes = st["notes"][:notes_trim]
+                archived_tasks = st["completed_tasks"][:tasks_trim]
+
+                if archive and (archived_notes or archived_tasks):
+                    # AI_STATE.archive.json を読み込み（なければ新規）
+                    af = _archive_file()
+                    if af.exists():
+                        try:
+                            with open(af, "r", encoding="utf-8-sig") as f:
+                                arc = json.load(f)
+                        except Exception:
+                            arc = {"notes": [], "completed_tasks": []}
+                    else:
+                        arc = {"notes": [], "completed_tasks": []}
+
+                    arc.setdefault("notes", []).extend(archived_notes)
+                    arc.setdefault("completed_tasks", []).extend(archived_tasks)
+                    arc["last_archived"] = _now_iso()
+
+                    # アーカイブファイルを原子的に書き込む
+                    _write_atomic(af, json.dumps(arc, ensure_ascii=False, indent=2))
+
                 st["notes"]           = st["notes"][notes_trim:]
                 st["completed_tasks"] = st["completed_tasks"][tasks_trim:]
 
@@ -2165,7 +2169,7 @@ def collab_set_handoff_template(preset: str = "full", project_path: str = '') ->
                 old_preset = state.get("handoff_template", "full")
                 state["handoff_template"] = preset
 
-            desc = t(f"set_template.desc.{preset}", **{}) or preset
+            desc = t(f"set_template.desc.{preset}") or preset
             return t("set_template.done", old=old_preset, new=preset, desc=desc)
     except RuntimeError as _pp_e:
         return t("err.runtime", msg=_pp_e)

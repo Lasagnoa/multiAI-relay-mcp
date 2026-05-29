@@ -520,6 +520,7 @@ _STRINGS: dict[str, dict[str, str]] = {
         "cleanup_sessions.no_dir":       "ai_sessions/ フォルダが存在しません。",
         "cleanup_sessions.no_target":    "削除対象なし（各AI最新{keep}件以内）。\n現在のログ数:\n{summary}",
         "cleanup_sessions.summary_item": "{AI}: {count}件",
+        "cleanup_sessions.separator":    "、",
         "cleanup_sessions.done":         "{count}件のセッションログを削除しました。\n残存ログ:\n{kept}\n削除ファイル:\n{files}",
         "cleanup_sessions.kept_item":    "{AI}: {count}件残存",
 
@@ -1099,6 +1100,7 @@ _STRINGS: dict[str, dict[str, str]] = {
         "cleanup_sessions.no_dir":       "ai_sessions/ folder does not exist.",
         "cleanup_sessions.no_target":    "Nothing to delete (each AI has at most {keep} logs).\nCurrent log counts:\n{summary}",
         "cleanup_sessions.summary_item": "{AI}: {count}",
+        "cleanup_sessions.separator":    ", ",
         "cleanup_sessions.done":         "Deleted {count} session log(s).\nRemaining logs:\n{kept}\nDeleted files:\n{files}",
         "cleanup_sessions.kept_item":    "{AI}: {count} remaining",
 

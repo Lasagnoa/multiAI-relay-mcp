@@ -15,6 +15,12 @@ from .state import (
 
 #region CLI呼び出しユーティリティ
 
+# CLIが標準出力に出力するノイズ行（stdin確認メッセージなど）
+_NOISE_LINES: frozenset[str] = frozenset({
+    "Reading additional input from stdin...",
+})
+
+
 def _cli_config_file() -> Path:
     """CLI設定ファイルのパスを返す（プロジェクトフォルダ内）"""
     return _get_project_dir() / "cli_config.json"
@@ -72,11 +78,6 @@ def _call_ai_cli(ai: str, prompt: str, timeout: int = 180) -> str:
         cwd = str(effective_project) if effective_project.exists() else None
     except RuntimeError:
         cwd = None
-
-    # CLIが標準出力に出力するノイズ行（stdin確認メッセージなど）
-    _NOISE_LINES: set[str] = {
-        "Reading additional input from stdin...",
-    }
 
     try:
         result = subprocess.run(

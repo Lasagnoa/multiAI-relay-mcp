@@ -9,6 +9,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import warnings
 from contextlib import contextmanager
 from contextvars import ContextVar
 from pathlib import Path
@@ -56,6 +57,8 @@ _MAX_RELATED_FILES = 10  # related_files の最大件数
 # タグ・カテゴリの許可文字パターン（ASCII英数字・ハイフン・アンダースコア）
 _SLUG_RE = re.compile(r'^[\w\-]+$', re.ASCII)
 
+# セッションログのヘッダ用ラベル（セッションログは常に日本語で記録する仕様のため日本語固定）
+# ※ i18n.py の _MODE_LABELS_I18N はUI表示用（言語切替対応）、こちらはログファイル用で別物
 MODE_LABELS: dict[str, str] = {
     "plan":      "仕様検討・設計",
     "implement": "実装",
@@ -557,7 +560,6 @@ def _append_session_log(ai_name: str, message: str) -> None:
             f.write(f"- [{time_str}] [MCP] {message}\n")
     except OSError as e:
         # セッションログへの追記失敗は致命的ではないが記録する
-        import warnings
         warnings.warn(f"セッションログへの追記に失敗しました: {logs[0]}: {e}", stacklevel=2)
 
 

@@ -140,7 +140,7 @@ collab_checkpoint("ここまで完了: ○○の実装。次は△△が必要",
 | `collab_checkpoint(message, to_ai)` | メモ追加と引き継ぎを1回で実行 |
 | `collab_consult(ai, question)` | 相手AIのCLIに相談する（要CLI設定） |
 | `collab_discuss(ai, topic)` | 相手AIと複数ラウンド議論する（要CLI設定） |
-| `collab_request_review(ai, context)` | 相手AIにコードレビューを依頼する（要CLI設定） |
+| `collab_request_review(ai, focus, scope)` | 相手AIにコードレビューを依頼する（要CLI設定） |
 | `collab_setup_cli(ai, command, ...)` | CLI呼び出し設定をカスタマイズ |
 | `collab_update_issue(issue_id, ...)` | 既存issueのseverity/category/tags/statusを更新する |
 | `collab_list_projects()` | 最近使ったプロジェクト一覧を表示する |
