@@ -137,6 +137,22 @@ _STRINGS: dict[str, dict[str, str]] = {
         "label.project_path":       "指定されたプロジェクトパス",
         "label.project_dir":        "プロジェクトディレクトリ",
 
+        # ── _resolve_project_path ─────────────────────────────────────────
+        "resolve_path.not_found": (
+            "指定されたプロジェクトパスが見つかりません: {path}\n"
+            "collab_switch_project() で正しいパスを先に登録してください。"
+        ),
+        "resolve_path.not_dir": (
+            "指定されたプロジェクトパスがディレクトリではありません: {path}\n"
+            "ディレクトリのパスを指定してください。"
+        ),
+
+        # ── _StateLock ────────────────────────────────────────────────────
+        "lock.timeout": (
+            "AI_STATE.json のロック取得がタイムアウトしました（{sec}秒）。\n"
+            "ロックファイルが残っている場合は手動で削除してください: {lock}"
+        ),
+
         # ── cli.py ────────────────────────────────────────────────────────
         "cli.no_config":    "エラー: '{ai}' のCLI設定がありません。",
         "cli.not_found": (
@@ -233,6 +249,73 @@ _STRINGS: dict[str, dict[str, str]] = {
         # ── collab_doctor ─────────────────────────────────────────────────
         "doctor.header":     "# 診断結果 — OK: {ok}件  WARN: {warn}件  ERR: {err}件",
         "doctor.suggestion": " → {sug}",
+        # プロジェクトフォルダ確認
+        "doctor.project_unset":        "プロジェクト未設定",
+        "doctor.project_unset_sug":    "collab_switch_project() を呼んでください",
+        "doctor.project_missing":      "プロジェクトフォルダが存在しない: {proj}",
+        "doctor.project_missing_sug":  "collab_switch_project() で正しいパスを再設定してください",
+        "doctor.project_dir_ok":       "プロジェクトフォルダ: {proj}",
+        # エンコーディング確認
+        "doctor.encoding_parse_err":   "AI_STATE.json のパースに失敗: {err}",
+        "doctor.encoding_parse_sug":   "collab_export_state/import_state replace で復旧できます",
+        "doctor.bom_detected":         "AI_STATE.json に UTF-8 BOM が含まれています",
+        "doctor.bom_detected_sug":     "読み込みは可能ですが、次回保存時に自動でBOMなしへ正規化されます",
+        "doctor.encoding_ok":          "AI_STATE.json エンコーディング正常（BOMなし UTF-8）",
+        # スキーマ確認
+        "doctor.schema_version_mismatch":     "スキーマバージョン不一致: ファイル={file_ver}, 期待={expected}",
+        "doctor.schema_version_mismatch_sug": "collab_import_state validate で検証できます",
+        "doctor.schema_version_ok":           "スキーマバージョン: {ver}",
+        "doctor.schema_missing_keys":         "必須キーが欠落: {keys}",
+        "doctor.schema_missing_keys_sug":     "collab_switch_project() で再接続すると自動補完されます",
+        "doctor.schema_bad_types":            "型不一致（リストが期待されるキー）: {keys}",
+        "doctor.schema_bad_types_sug":        "AI_STATE.json を手動修正するか collab_import_state replace で復旧してください",
+        "doctor.schema_keys_ok":              "必須キーと型は正常",
+        # 状態ファイル確認
+        "doctor.state_missing":       "AI_STATE.json が未作成",
+        "doctor.state_missing_sug":   "collab_switch_project() で新規作成できます",
+        "doctor.state_load_ok":       "AI_STATE.json 正常 (担当: {ai}, セッション: #{session})",
+        "doctor.state_load_fail":     "AI_STATE.json 読み込み失敗: {err}",
+        "doctor.state_load_fail_sug": "collab_import_state replace で復旧できます",
+        # Issue 整合性確認
+        "doctor.issues_non_dict":              "{list_key}[{idx}]: dict でない要素あり（旧フォーマット）",
+        "doctor.issues_non_dict_sug":          "collab_switch_project() で再接続すると自動マイグレーションされます",
+        "doctor.issues_bad_severity":          "{list_key}: 無効な severity — {ids}",
+        "doctor.issues_bad_severity_sug":      "collab_update_issue で P0/P1/P2/P3 に修正してください",
+        "doctor.issues_duplicate_id":          "{list_key}: 重複する issue ID — {ids}",
+        "doctor.issues_duplicate_id_sug":      "AI_STATE.json を手動確認して重複を解消してください",
+        "doctor.issues_bad_text":              "{list_key}: text フィールドが空または非文字列 — {ids}",
+        "doctor.issues_bad_text_sug":          "AI_STATE.json を手動確認して text を文字列で設定してください",
+        "doctor.issues_bad_tags":              "{list_key}: tags 形式不正 — {ids}",
+        "doctor.issues_bad_tags_sug":          "タグはスラッグ形式（英数字・ハイフン・アンダースコア）で指定してください",
+        "doctor.issues_bad_related_files":     "{list_key}: related_files に危険なパスあり — {ids}",
+        "doctor.issues_bad_related_files_sug": "related_files はプロジェクト相対パスのみ。「..」や絶対パスは使用できません",
+        "doctor.issues_bad_id":                "{list_key}: id フィールドが空・非文字列またはスラッグ形式外 — {ids}",
+        "doctor.issues_bad_id_sug":            "id は英数字・ハイフン・アンダースコアのみの非空文字列にしてください",
+        "doctor.issues_bad_category":          "{list_key}: category フィールドが不正 — {ids}",
+        "doctor.issues_bad_category_sug":      "category は slug 形式（英数字・ハイフン・アンダースコア）で指定してください",
+        "doctor.issues_ok":                    "{list_key}: {count}件 正常",
+        # ロックファイル確認
+        "doctor.lock_bad_content":     "ロックファイル内容が不正: {content!r}",
+        "doctor.lock_bad_content_sug": "手動削除を検討: AI_STATE.lock",
+        "doctor.lock_alive":           "ロックファイルあり (PID {pid} は生存中, {age}秒経過)",
+        "doctor.lock_alive_sug":       "別プロセスが書き込み中の可能性",
+        "doctor.lock_stale":           "古いロックファイル (PID {pid} は不在, {age}秒経過)",
+        "doctor.lock_stale_sug":       "次回書き込み時に自動解除されます",
+        "doctor.lock_parse_fail":      "ロックファイル解析失敗: {err}",
+        "doctor.lock_parse_fail_sug":  "手動削除を検討: AI_STATE.lock",
+        "doctor.lock_clean":           "ロックファイルなし（正常）",
+        # CLI コマンド確認
+        "doctor.cli_ok":          "{AI} CLI: {path}",
+        "doctor.cli_missing":     "{AI} CLI 未検出 ({cmd})",
+        "doctor.cli_missing_sug": "collab_setup_cli() で設定してください",
+        # AI 呼び出し確認
+        "doctor.ai_call_skip": "{AI} CLI 呼び出しテストをスキップ（コマンド未検出）",
+        "doctor.ai_call_err":  "{AI} CLI 応答エラー: {resp}",
+        "doctor.ai_call_ok":   "{AI} CLI 呼び出し成功",
+        "doctor.ai_call_exc":  "{AI} CLI 呼び出し例外: {err}",
+        # 復旧関連ファイル確認
+        "doctor.recovery_archive": "AI_STATE.archive.json あり ({size_kb}KB)",
+        "doctor.recovery_export":  "エクスポートファイル: {count}件",
 
         # ── collab_status ─────────────────────────────────────────────────
         "status.header":       "# AI協働開発 現在の状態",
@@ -465,8 +548,9 @@ _STRINGS: dict[str, dict[str, str]] = {
         "cleanup_history.delete_note":    "単純削除",
 
         # ── collab_export_state ───────────────────────────────────────────
-        "export.err_path":  "エラー: output_path は絶対パスを指定してください。",
-        "export.err_write": "エラー: ファイルの書き込みに失敗しました: {err}",
+        "export.err_path":           "エラー: output_path は絶対パスを指定してください。",
+        "export.err_write":          "エラー: ファイルの書き込みに失敗しました: {err}",
+        "export.session_read_error": "（読み込み失敗）",
         "export.done": (
             "状態をエクスポートしました。\n"
             "  出力ファイル: {out}\n"
@@ -633,6 +717,22 @@ _STRINGS: dict[str, dict[str, str]] = {
         "label.project_path":       "Specified project path",
         "label.project_dir":        "Project directory",
 
+        # ── _resolve_project_path ─────────────────────────────────────────
+        "resolve_path.not_found": (
+            "Specified project path not found: {path}\n"
+            "Please register the correct path first with collab_switch_project()."
+        ),
+        "resolve_path.not_dir": (
+            "Specified project path is not a directory: {path}\n"
+            "Please specify a directory path."
+        ),
+
+        # ── _StateLock ────────────────────────────────────────────────────
+        "lock.timeout": (
+            "Timed out waiting for AI_STATE.json lock ({sec} seconds).\n"
+            "If a lock file remains, delete it manually: {lock}"
+        ),
+
         # ── cli.py ────────────────────────────────────────────────────────
         "cli.no_config":    "Error: No CLI configuration found for '{ai}'.",
         "cli.not_found": (
@@ -729,6 +829,73 @@ _STRINGS: dict[str, dict[str, str]] = {
         # ── collab_doctor ─────────────────────────────────────────────────
         "doctor.header":     "# Diagnostics — OK: {ok}  WARN: {warn}  ERR: {err}",
         "doctor.suggestion": " → {sug}",
+        # Project folder check
+        "doctor.project_unset":        "Project not set",
+        "doctor.project_unset_sug":    "Please call collab_switch_project()",
+        "doctor.project_missing":      "Project folder does not exist: {proj}",
+        "doctor.project_missing_sug":  "Please call collab_switch_project() with the correct path",
+        "doctor.project_dir_ok":       "Project folder: {proj}",
+        # Encoding check
+        "doctor.encoding_parse_err":   "Failed to parse AI_STATE.json: {err}",
+        "doctor.encoding_parse_sug":   "Recover with collab_export_state/import_state replace",
+        "doctor.bom_detected":         "AI_STATE.json contains UTF-8 BOM",
+        "doctor.bom_detected_sug":     "Readable, but will be normalized to BOM-less on next save",
+        "doctor.encoding_ok":          "AI_STATE.json encoding OK (BOM-less UTF-8)",
+        # Schema check
+        "doctor.schema_version_mismatch":     "Schema version mismatch: file={file_ver}, expected={expected}",
+        "doctor.schema_version_mismatch_sug": "Validate with collab_import_state validate",
+        "doctor.schema_version_ok":           "Schema version: {ver}",
+        "doctor.schema_missing_keys":         "Missing required keys: {keys}",
+        "doctor.schema_missing_keys_sug":     "Reconnect with collab_switch_project() to auto-fill missing keys",
+        "doctor.schema_bad_types":            "Type mismatch (keys expected to be lists): {keys}",
+        "doctor.schema_bad_types_sug":        "Fix AI_STATE.json manually or recover with collab_import_state replace",
+        "doctor.schema_keys_ok":              "Required keys and types are correct",
+        # State file check
+        "doctor.state_missing":       "AI_STATE.json not created",
+        "doctor.state_missing_sug":   "Create it with collab_switch_project()",
+        "doctor.state_load_ok":       "AI_STATE.json OK (assignee: {ai}, session: #{session})",
+        "doctor.state_load_fail":     "Failed to load AI_STATE.json: {err}",
+        "doctor.state_load_fail_sug": "Recover with collab_import_state replace",
+        # Issue integrity check
+        "doctor.issues_non_dict":              "{list_key}[{idx}]: non-dict entries found (old format)",
+        "doctor.issues_non_dict_sug":          "Reconnect with collab_switch_project() to auto-migrate",
+        "doctor.issues_bad_severity":          "{list_key}: invalid severity — {ids}",
+        "doctor.issues_bad_severity_sug":      "Fix with collab_update_issue using P0/P1/P2/P3",
+        "doctor.issues_duplicate_id":          "{list_key}: duplicate issue IDs — {ids}",
+        "doctor.issues_duplicate_id_sug":      "Manually inspect AI_STATE.json to resolve duplicates",
+        "doctor.issues_bad_text":              "{list_key}: text field is empty or non-string — {ids}",
+        "doctor.issues_bad_text_sug":          "Manually fix AI_STATE.json to set text as a string",
+        "doctor.issues_bad_tags":              "{list_key}: invalid tags format — {ids}",
+        "doctor.issues_bad_tags_sug":          "Tags must be in slug format (letters, digits, hyphens, underscores)",
+        "doctor.issues_bad_related_files":     "{list_key}: unsafe paths in related_files — {ids}",
+        "doctor.issues_bad_related_files_sug": "related_files must be project-relative paths; '..' and absolute paths are not allowed",
+        "doctor.issues_bad_id":                "{list_key}: id field is empty, non-string, or not slug format — {ids}",
+        "doctor.issues_bad_id_sug":            "id must be a non-empty string of letters, digits, hyphens, and underscores",
+        "doctor.issues_bad_category":          "{list_key}: invalid category field — {ids}",
+        "doctor.issues_bad_category_sug":      "category must be in slug format (letters, digits, hyphens, underscores)",
+        "doctor.issues_ok":                    "{list_key}: {count} entries OK",
+        # Lock file check
+        "doctor.lock_bad_content":     "Lock file content is invalid: {content!r}",
+        "doctor.lock_bad_content_sug": "Consider manual deletion: AI_STATE.lock",
+        "doctor.lock_alive":           "Lock file found (PID {pid} is alive, {age} seconds elapsed)",
+        "doctor.lock_alive_sug":       "Another process may be writing",
+        "doctor.lock_stale":           "Stale lock file (PID {pid} is gone, {age} seconds elapsed)",
+        "doctor.lock_stale_sug":       "Will be auto-removed on next write",
+        "doctor.lock_parse_fail":      "Failed to parse lock file: {err}",
+        "doctor.lock_parse_fail_sug":  "Consider manual deletion: AI_STATE.lock",
+        "doctor.lock_clean":           "No lock file (normal)",
+        # CLI command check
+        "doctor.cli_ok":          "{AI} CLI: {path}",
+        "doctor.cli_missing":     "{AI} CLI not detected ({cmd})",
+        "doctor.cli_missing_sug": "Configure with collab_setup_cli()",
+        # AI call check
+        "doctor.ai_call_skip": "{AI} CLI call test skipped (command not found)",
+        "doctor.ai_call_err":  "{AI} CLI response error: {resp}",
+        "doctor.ai_call_ok":   "{AI} CLI call successful",
+        "doctor.ai_call_exc":  "{AI} CLI call exception: {err}",
+        # Recovery file check
+        "doctor.recovery_archive": "AI_STATE.archive.json found ({size_kb}KB)",
+        "doctor.recovery_export":  "Export files found: {count}",
 
         # ── collab_status ─────────────────────────────────────────────────
         "status.header":       "# AI Collaborative Development — Current State",
@@ -960,8 +1127,9 @@ _STRINGS: dict[str, dict[str, str]] = {
         "cleanup_history.delete_note":    "deleted",
 
         # ── collab_export_state ───────────────────────────────────────────
-        "export.err_path":  "Error: output_path must be an absolute path.",
-        "export.err_write": "Error: Failed to write file: {err}",
+        "export.err_path":           "Error: output_path must be an absolute path.",
+        "export.err_write":          "Error: Failed to write file: {err}",
+        "export.session_read_error": "(read failed)",
         "export.done": (
             "State exported.\n"
             "  Output file: {out}\n"

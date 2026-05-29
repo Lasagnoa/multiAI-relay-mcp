@@ -25,7 +25,7 @@ from pathlib import Path
 from mcp.server.fastmcp import FastMCP
 
 from . import state as state_mod
-from .i18n import mode_label, t
+from .i18n import get_lang, mode_label, t
 from .cli import (
     _build_consult_prompt,
     _call_ai_cli,
@@ -327,25 +327,25 @@ def collab_doctor(
 
             #region プロジェクトフォルダ確認
             if proj is None:
-                warn("project_unset", "プロジェクト未設定", "collab_switch_project() を呼んでください")
+                warn("project_unset", t("doctor.project_unset"), t("doctor.project_unset_sug"))
             elif not proj.exists():
-                err("project_missing", f"プロジェクトフォルダが存在しない: {proj}",
-                    "collab_switch_project() で正しいパスを再設定してください")
+                err("project_missing", t("doctor.project_missing", proj=proj),
+                    t("doctor.project_missing_sug"))
             else:
-                ok("project_dir", f"プロジェクトフォルダ: {proj}")
+                ok("project_dir", t("doctor.project_dir_ok", proj=proj))
             #endregion
 
             #region エンコーディング確認（BOM検出）
             if check_encoding and sf and sf.exists():
                 raw_data, has_bom, raw_err = state_mod.read_raw_state_json(sf)
                 if raw_err:
-                    err("encoding_parse", f"AI_STATE.json のパースに失敗: {raw_err}",
-                        "collab_export_state/import_state replace で復旧できます")
+                    err("encoding_parse", t("doctor.encoding_parse_err", err=raw_err),
+                        t("doctor.encoding_parse_sug"))
                 elif has_bom:
-                    warn("bom_detected", "AI_STATE.json に UTF-8 BOM が含まれています",
-                         "読み込みは可能ですが、次回保存時に自動でBOMなしへ正規化されます")
+                    warn("bom_detected", t("doctor.bom_detected"),
+                         t("doctor.bom_detected_sug"))
                 else:
-                    ok("encoding_ok", "AI_STATE.json エンコーディング正常（BOMなし UTF-8）")
+                    ok("encoding_ok", t("doctor.encoding_ok"))
             #endregion
 
             #region スキーマ確認（raw JSON で正規化前の状態を検査）
@@ -356,16 +356,17 @@ def collab_doctor(
                     raw_ver = raw_data.get("version", "(なし)")
                     if raw_ver != _STATE_SCHEMA_VERSION:
                         warn("schema_version",
-                             f"スキーマバージョン不一致: ファイル={raw_ver}, 期待={_STATE_SCHEMA_VERSION}",
-                             "collab_import_state validate で検証できます")
+                             t("doctor.schema_version_mismatch",
+                               file_ver=raw_ver, expected=_STATE_SCHEMA_VERSION),
+                             t("doctor.schema_version_mismatch_sug"))
                     else:
-                        ok("schema_version", f"スキーマバージョン: {raw_ver}")
+                        ok("schema_version", t("doctor.schema_version_ok", ver=raw_ver))
                     # 必須キー確認
                     missing = [k for k in _STATE_DEFAULTS if k not in raw_data]
                     if missing:
                         warn("schema_missing_keys",
-                             f"必須キーが欠落: {', '.join(missing)}",
-                             "collab_switch_project() で再接続すると自動補完されます")
+                             t("doctor.schema_missing_keys", keys=', '.join(missing)),
+                             t("doctor.schema_missing_keys_sug"))
                     # リスト型の型確認
                     bad_types = [
                         k for k, v in _STATE_DEFAULTS.items()
@@ -373,27 +374,26 @@ def collab_doctor(
                     ]
                     if bad_types:
                         warn("schema_bad_types",
-                             f"型不一致（リストが期待されるキー）: {', '.join(bad_types)}",
-                             "AI_STATE.json を手動修正するか collab_import_state replace で復旧してください")
+                             t("doctor.schema_bad_types", keys=', '.join(bad_types)),
+                             t("doctor.schema_bad_types_sug"))
                     if not missing and not bad_types:
-                        ok("schema_keys", "必須キーと型は正常")
+                        ok("schema_keys", t("doctor.schema_keys_ok"))
             #endregion
 
             #region 状態ファイル確認（_load_state 経由・正規化後）
             if check_state and proj and proj.exists():
                 if not sf or not sf.exists():
-                    warn("state_missing", "AI_STATE.json が未作成",
-                         "collab_switch_project() で新規作成できます")
+                    warn("state_missing", t("doctor.state_missing"),
+                         t("doctor.state_missing_sug"))
                 else:
                     try:
                         loaded = _load_state()
-                        ok("state_load",
-                           f"AI_STATE.json 正常"
-                           f" (担当: {loaded.get('current_ai','?').upper()}"
-                           f", セッション: #{loaded.get('session_count','?')})")
+                        ok("state_load", t("doctor.state_load_ok",
+                           ai=loaded.get('current_ai', '?').upper(),
+                           session=loaded.get('session_count', '?')))
                     except Exception as e:
-                        err("state_load_fail", f"AI_STATE.json 読み込み失敗: {e}",
-                            "collab_import_state replace で復旧できます")
+                        err("state_load_fail", t("doctor.state_load_fail", err=e),
+                            t("doctor.state_load_fail_sug"))
             #endregion
 
             #region Issue 整合性確認（raw JSON で正規化前の状態を検査）
@@ -408,8 +408,8 @@ def collab_doctor(
                         non_dict_idx = [i for i, iss in enumerate(issues) if not isinstance(iss, dict)]
                         if non_dict_idx:
                             warn("issues_non_dict",
-                                 f"{list_key}[{non_dict_idx}]: dict でない要素あり（旧フォーマット）",
-                                 "collab_switch_project() で再接続すると自動マイグレーションされます")
+                                 t("doctor.issues_non_dict", list_key=list_key, idx=non_dict_idx),
+                                 t("doctor.issues_non_dict_sug"))
                         # 有効な dict issue のみ詳細検査
                         dict_issues = [iss for iss in issues if isinstance(iss, dict)]
                         # severity 不正値
@@ -419,16 +419,17 @@ def collab_doctor(
                         ]
                         if bad_sev:
                             warn("issues_bad_severity",
-                                 f"{list_key}: 無効な severity — {bad_sev}",
-                                 "collab_update_issue で P0/P1/P2/P3 に修正してください")
+                                 t("doctor.issues_bad_severity", list_key=list_key, ids=bad_sev),
+                                 t("doctor.issues_bad_severity_sug"))
                         # 重複ID（Counter で正確に集計）
                         ids = [iss.get("id") for iss in dict_issues]
                         id_counts = Counter(i for i in ids if i is not None)
                         dups = [i for i, cnt in id_counts.items() if cnt > 1]
                         if dups:
                             warn("issues_duplicate_id",
-                                 f"{list_key}: 重複する issue ID — {list(dict.fromkeys(dups))}",
-                                 "AI_STATE.json を手動確認して重複を解消してください")
+                                 t("doctor.issues_duplicate_id",
+                                   list_key=list_key, ids=list(dict.fromkeys(dups))),
+                                 t("doctor.issues_duplicate_id_sug"))
                         # text / id フィールド検証（非文字列・空文字）
                         bad_text = [
                             iss.get("id", f"[{_i}]") for _i, iss in enumerate(dict_issues)
@@ -436,8 +437,8 @@ def collab_doctor(
                         ]
                         if bad_text:
                             warn("issues_bad_text",
-                                 f"{list_key}: text フィールドが空または非文字列 — {bad_text}",
-                                 "AI_STATE.json を手動確認して text を文字列で設定してください")
+                                 t("doctor.issues_bad_text", list_key=list_key, ids=bad_text),
+                                 t("doctor.issues_bad_text_sug"))
                         # tags 形式検証 / related_files パス安全性検証
                         bad_tags: list = []
                         bad_files: list = []
@@ -453,12 +454,12 @@ def collab_doctor(
                                     bad_files.append(_iid)
                         if bad_tags:
                             warn("issues_bad_tags",
-                                 f"{list_key}: tags 形式不正 — {bad_tags}",
-                                 "タグはスラッグ形式（英数字・ハイフン・アンダースコア）で指定してください")
+                                 t("doctor.issues_bad_tags", list_key=list_key, ids=bad_tags),
+                                 t("doctor.issues_bad_tags_sug"))
                         if bad_files:
                             warn("issues_bad_related_files",
-                                 f"{list_key}: related_files に危険なパスあり — {bad_files}",
-                                 "related_files はプロジェクト相対パスのみ。「..」や絶対パスは使用できません")
+                                 t("doctor.issues_bad_related_files", list_key=list_key, ids=bad_files),
+                                 t("doctor.issues_bad_related_files_sug"))
                         # id フィールド検証（空文字・非文字列・スラッグ形式外）
                         bad_id: list = []
                         for _i, _iss in enumerate(dict_issues):
@@ -470,8 +471,8 @@ def collab_doctor(
                                 bad_id.append(_label)
                         if bad_id:
                             warn("issues_bad_id",
-                                 f"{list_key}: id フィールドが空・非文字列またはスラッグ形式外 — {bad_id}",
-                                 "id は英数字・ハイフン・アンダースコアのみの非空文字列にしてください")
+                                 t("doctor.issues_bad_id", list_key=list_key, ids=bad_id),
+                                 t("doctor.issues_bad_id_sug"))
                         # category フィールド検証（スラッグ形式・長さチェック）
                         bad_cat: list = []
                         for _i, _iss in enumerate(dict_issues):
@@ -484,10 +485,11 @@ def collab_doctor(
                                     bad_cat.append(_iid)
                         if bad_cat:
                             warn("issues_bad_category",
-                                 f"{list_key}: category フィールドが不正 — {bad_cat}",
-                                 "category は slug 形式（英数字・ハイフン・アンダースコア）で指定してください")
-                        if not any([non_dict_idx, bad_sev, dups, bad_text, bad_id, bad_cat, bad_tags, bad_files]):
-                            ok(f"issues_{list_key}", f"{list_key}: {len(issues)}件 正常")
+                                 t("doctor.issues_bad_category", list_key=list_key, ids=bad_cat),
+                                 t("doctor.issues_bad_category_sug"))
+                        if not any((non_dict_idx, bad_sev, dups, bad_text, bad_id, bad_cat, bad_tags, bad_files)):
+                            ok(f"issues_{list_key}", t("doctor.issues_ok",
+                               list_key=list_key, count=len(issues)))
             #endregion
 
             #region ロックファイル確認（PID生存確認・経過秒付き）
@@ -499,21 +501,22 @@ def collab_doctor(
                         pid  = int(text) if text.isdigit() else None
                         age  = int(time.time() - lock_file.stat().st_mtime)
                         if pid is None:
-                            warn("lock_bad_content", f"ロックファイル内容が不正: {text!r}",
-                                 "手動削除を検討: AI_STATE.lock")
+                            warn("lock_bad_content",
+                                 t("doctor.lock_bad_content", content=text),
+                                 t("doctor.lock_bad_content_sug"))
                         elif _pid_exists(pid):
                             warn("lock_alive",
-                                 f"ロックファイルあり (PID {pid} は生存中, {age}秒経過)",
-                                 "別プロセスが書き込み中の可能性")
+                                 t("doctor.lock_alive", pid=pid, age=age),
+                                 t("doctor.lock_alive_sug"))
                         else:
                             warn("lock_stale",
-                                 f"古いロックファイル (PID {pid} は不在, {age}秒経過)",
-                                 "次回書き込み時に自動解除されます")
+                                 t("doctor.lock_stale", pid=pid, age=age),
+                                 t("doctor.lock_stale_sug"))
                     except Exception as e:
-                        warn("lock_parse_fail", f"ロックファイル解析失敗: {e}",
-                             "手動削除を検討: AI_STATE.lock")
+                        warn("lock_parse_fail", t("doctor.lock_parse_fail", err=e),
+                             t("doctor.lock_parse_fail_sug"))
                 else:
-                    ok("lock_clean", "ロックファイルなし（正常）")
+                    ok("lock_clean", t("doctor.lock_clean"))
             #endregion
 
             #region CLI コマンド確認
@@ -524,10 +527,11 @@ def collab_doctor(
                     cmd  = cfg.get("command", DEFAULT_CLI_CONFIG[ai_name]["command"])
                     path = _resolve_cli_path(ai_name, cmd)
                     if path:
-                        ok(f"cli_{ai_name}", f"{ai_name.upper()} CLI: {path}")
+                        ok(f"cli_{ai_name}", t("doctor.cli_ok", AI=ai_name.upper(), path=path))
                     else:
-                        warn(f"cli_{ai_name}_missing", f"{ai_name.upper()} CLI 未検出 ({cmd})",
-                             "collab_setup_cli() で設定してください")
+                        warn(f"cli_{ai_name}_missing",
+                             t("doctor.cli_missing", AI=ai_name.upper(), cmd=cmd),
+                             t("doctor.cli_missing_sug"))
             #endregion
 
             #region AI 呼び出し確認（高コスト・オプション）
@@ -539,23 +543,25 @@ def collab_doctor(
                     path   = _resolve_cli_path(ai_name, cmd)
                     if not path:
                         warn(f"ai_call_{ai_name}_skip",
-                             f"{ai_name.upper()} CLI 呼び出しテストをスキップ（コマンド未検出）")
+                             t("doctor.ai_call_skip", AI=ai_name.upper()))
                         continue
                     try:
                         # ヘルスチェック用の簡易プロンプト（CLI確認目的）
                         _health_prompt = (
                             "This is a health check. Please reply with 'OK' only."
-                            if __import__('os').environ.get('MULTIAI_LANG', 'ja').lower() == 'en'
+                            if get_lang() == 'en'
                             else "ヘルスチェックです。「OK」とだけ答えてください。"
                         )
                         ai_result = _call_ai_cli(ai_name, _health_prompt, timeout=30)
                         # i18n対応: エラーメッセージは言語によって "エラー:" / "Error:" で始まる
                         if ai_result.startswith(("エラー", "Error")):
-                            warn(f"ai_call_{ai_name}_err", f"{ai_name.upper()} CLI 応答エラー: {ai_result[:80]}")
+                            warn(f"ai_call_{ai_name}_err",
+                                 t("doctor.ai_call_err", AI=ai_name.upper(), resp=ai_result[:80]))
                         else:
-                            ok(f"ai_call_{ai_name}", f"{ai_name.upper()} CLI 呼び出し成功")
+                            ok(f"ai_call_{ai_name}", t("doctor.ai_call_ok", AI=ai_name.upper()))
                     except Exception as e:
-                        err(f"ai_call_{ai_name}_exc", f"{ai_name.upper()} CLI 呼び出し例外: {e}")
+                        err(f"ai_call_{ai_name}_exc",
+                            t("doctor.ai_call_exc", AI=ai_name.upper(), err=e))
             #endregion
 
             #region 復旧関連ファイル確認
@@ -563,10 +569,10 @@ def collab_doctor(
                 archive = proj / "AI_STATE.archive.json"
                 if archive.exists():
                     size_kb = archive.stat().st_size // 1024
-                    ok("recovery_archive", f"AI_STATE.archive.json あり ({size_kb}KB)")
+                    ok("recovery_archive", t("doctor.recovery_archive", size_kb=size_kb))
                 exports = list(proj.glob("*.export.json"))
                 if exports:
-                    ok("recovery_export", f"エクスポートファイル: {len(exports)}件")
+                    ok("recovery_export", t("doctor.recovery_export", count=len(exports)))
             #endregion
 
             #region 出力
@@ -1140,9 +1146,9 @@ def collab_add_pending_task(title: str, description: str = "", project_path: str
                 return err
             with _state_transaction() as state:
                 task_numbers = [
-                    int(t["id"].split("-")[-1])
-                    for t in state.get("pending_tasks", []) + state.get("completed_pending_tasks", [])
-                    if t.get("id", "").startswith("pending-") and t["id"].split("-")[-1].isdigit()
+                    int(task["id"].split("-")[-1])
+                    for task in state.get("pending_tasks", []) + state.get("completed_pending_tasks", [])
+                    if task.get("id", "").startswith("pending-") and task["id"].split("-")[-1].isdigit()
                 ]
                 task_id = f"pending-{max(task_numbers, default=0) + 1:03d}"
                 state["pending_tasks"].append({
@@ -1983,7 +1989,7 @@ def collab_export_state(
                         try:
                             session_data[log_file.name] = log_file.read_text(encoding="utf-8")
                         except OSError:
-                            session_data[log_file.name] = "（読み込み失敗）"
+                            session_data[log_file.name] = t("export.session_read_error")
                 payload["sessions"] = session_data
 
             if not redact_cli_config:
@@ -2168,39 +2174,6 @@ def collab_set_handoff_template(preset: str = "full", project_path: str = '') ->
 
 #region エントリポイント
 
-def _print_help(version_only: bool = False) -> None:
-    """
-    ヘルプ / バージョン情報を出力する。
-    uvx ランチャー経由では stdout に書けない場合があるため、
-    stdout → stderr → CONOUT$ の順でフォールバックする。
-    """
-    text = f"multiai-relay-mcp {_VERSION}\n" if version_only else _HELP_TEXT
-    encoded = text.encode("utf-8", errors="replace")
-
-    # 1) fd=1 (stdout) への直接書き込み
-    try:
-        os.write(1, encoded)
-        return
-    except OSError:
-        pass
-
-    # 2) fd=2 (stderr) へのフォールバック
-    try:
-        os.write(2, encoded)
-        return
-    except OSError:
-        pass
-
-    # 3) Windows コンソール (CONOUT$) への直接書き込み
-    if sys.platform == "win32":
-        try:
-            with open("CONOUT$", "wb") as con:
-                con.write(encoded)
-            return
-        except OSError:
-            pass
-
-
 _VERSION = "1.1.0"
 
 # ヘルプテキスト（AIが読むことを想定して日本語で詳述）
@@ -2267,6 +2240,39 @@ MCPツール一覧（Claude Desktop / Codex Desktop から自動呼び出し）:
   2. collab_switch_project('プロジェクトのフルパス') を呼ぶ
   3. collab_status で状態を確認する
 """
+
+
+def _print_help(version_only: bool = False) -> None:
+    """
+    ヘルプ / バージョン情報を出力する。
+    uvx ランチャー経由では stdout に書けない場合があるため、
+    stdout → stderr → CONOUT$ の順でフォールバックする。
+    """
+    text = f"multiai-relay-mcp {_VERSION}\n" if version_only else _HELP_TEXT
+    encoded = text.encode("utf-8", errors="replace")
+
+    # 1) fd=1 (stdout) への直接書き込み
+    try:
+        os.write(1, encoded)
+        return
+    except OSError:
+        pass
+
+    # 2) fd=2 (stderr) へのフォールバック
+    try:
+        os.write(2, encoded)
+        return
+    except OSError:
+        pass
+
+    # 3) Windows コンソール (CONOUT$) への直接書き込み
+    if sys.platform == "win32":
+        try:
+            with open("CONOUT$", "wb") as con:
+                con.write(encoded)
+            return
+        except OSError:
+            pass
 
 
 def main() -> None:

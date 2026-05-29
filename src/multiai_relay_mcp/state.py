@@ -298,13 +298,13 @@ def _load_state() -> dict:
         r for r in (_normalize_decision(d) for d in state["key_decisions"]) if r is not None
     ]
     state["pending_tasks"] = [
-        r for r in (_normalize_pending_task(t) for t in state["pending_tasks"]) if r is not None
+        r for r in (_normalize_pending_task(item) for item in state["pending_tasks"]) if r is not None
     ]
     state["completed_tasks"] = [
-        r for r in (_normalize_task(t) for t in state["completed_tasks"]) if r is not None
+        r for r in (_normalize_task(item) for item in state["completed_tasks"]) if r is not None
     ]
     state["completed_pending_tasks"] = [
-        r for r in (_normalize_pending_task(t) for t in state["completed_pending_tasks"]) if r is not None
+        r for r in (_normalize_pending_task(item) for item in state["completed_pending_tasks"]) if r is not None
     ]
     if state.get("current_task") is not None:
         state["current_task"] = _normalize_task(state["current_task"])
@@ -399,8 +399,8 @@ def _normalize_issue(issue, resolved: bool = False) -> dict | None:
     if not isinstance(raw_tags, list):
         raw_tags = []
     issue["tags"] = [
-        t for t in raw_tags
-        if isinstance(t, str) and t and _SLUG_RE.match(t) and len(t) <= _MAX_TAG_LEN
+        tag for tag in raw_tags
+        if isinstance(tag, str) and tag and _SLUG_RE.match(tag) and len(tag) <= _MAX_TAG_LEN
     ][:_MAX_TAGS]
 
     # related_files: 文字列配列（制御文字・絶対パス・.. を除去）
@@ -483,10 +483,7 @@ class _StateLock:
                 except OSError:
                     pass
                 time.sleep(0.05)
-        raise RuntimeError(
-            f"AI_STATE.json のロック取得がタイムアウトしました（{self._TIMEOUT_SEC}秒）。\n"
-            f"ロックファイルが残っている場合は手動で削除してください: {self._lock}"
-        )
+        raise RuntimeError(t("lock.timeout", sec=self._TIMEOUT_SEC, lock=self._lock))
 
     def __exit__(self, *_) -> None:
         # 自分のPIDのロックのみ削除（他プロセスが上書きした場合は削除しない）
@@ -703,15 +700,9 @@ def _resolve_project_path(project_path: "str | Path") -> Path:
     """
     resolved = Path(str(project_path)).expanduser().resolve()
     if not resolved.exists():
-        raise RuntimeError(
-            f"指定されたプロジェクトパスが見つかりません: {resolved}\n"
-            "collab_switch_project() で正しいパスを先に登録してください。"
-        )
+        raise RuntimeError(t("resolve_path.not_found", path=resolved))
     if not resolved.is_dir():
-        raise RuntimeError(
-            f"指定されたプロジェクトパスがディレクトリではありません: {resolved}\n"
-            "ディレクトリのパスを指定してください。"
-        )
+        raise RuntimeError(t("resolve_path.not_dir", path=resolved))
     return resolved
 
 
