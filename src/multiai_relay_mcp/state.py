@@ -242,6 +242,11 @@ def _load_state() -> dict:
     with open(sf, "r", encoding="utf-8-sig") as f:
         state = json.load(f)
 
+    # トップレベルがJSONオブジェクトでない場合（配列・文字列・数値など）は
+    # 後続の state[key] 代入が TypeError になるため、ここで明確なエラーにする
+    if not isinstance(state, dict):
+        raise RuntimeError(t("load_state.not_dict", sf=sf))
+
     # スキーマ検証: 必須キーの存在確認とデフォルト値での補完
     for key, default in _STATE_DEFAULTS.items():
         if key not in state:
@@ -744,7 +749,14 @@ def read_raw_state_json(sf: Path) -> tuple[dict | None, bool, str | None]:
     try:
         raw = sf.read_bytes()
         has_bom = raw.startswith(b'\xef\xbb\xbf')
-        text = raw.lstrip(b'\xef\xbb\xbf').decode('utf-8')
-        return json.loads(text), has_bom, None
+        # lstrip(バイト集合) は本文先頭の ef/bb/bf も剥がしてしまうため、
+        # BOM がある場合のみ正確に先頭3バイトを除去する
+        body = raw[3:] if has_bom else raw
+        parsed = json.loads(body.decode('utf-8'))
+        # トップレベルが dict でない場合、診断側の .get 呼び出しが
+        # AttributeError になるため、ここでエラーとして扱う
+        if not isinstance(parsed, dict):
+            return None, has_bom, t("raw_state.not_dict")
+        return parsed, has_bom, None
     except Exception as e:
         return None, False, str(e)

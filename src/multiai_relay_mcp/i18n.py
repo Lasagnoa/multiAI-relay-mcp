@@ -108,6 +108,11 @@ _STRINGS: dict[str, dict[str, str]] = {
             "AI_STATE.json が見つかりません: {sf}\n"
             "collab_switch_project(path, project_name='プロジェクト名') を呼び出して初期化してください。"
         ),
+        "load_state.not_dict": (
+            "AI_STATE.json の中身が不正です（トップレベルがJSONオブジェクトではありません）: {sf}\n"
+            "ファイルが破損している可能性があります。バックアップから復元するか collab_import_state を使ってください。"
+        ),
+        "raw_state.not_dict": "トップレベルがJSONオブジェクト（dict）ではありません。",
 
         # ── _validate_tags ────────────────────────────────────────────────
         "validate.tags.not_list":     "エラー: {field} はリストで指定してください。",
@@ -692,6 +697,11 @@ _STRINGS: dict[str, dict[str, str]] = {
             "AI_STATE.json not found: {sf}\n"
             "Please call collab_switch_project(path, project_name='Project Name') to initialize."
         ),
+        "load_state.not_dict": (
+            "AI_STATE.json is invalid (top level is not a JSON object): {sf}\n"
+            "The file may be corrupted. Restore from a backup or use collab_import_state."
+        ),
+        "raw_state.not_dict": "Top level is not a JSON object (dict).",
 
         # ── _validate_tags ────────────────────────────────────────────────
         "validate.tags.not_list":     "Error: {field} must be a list.",
