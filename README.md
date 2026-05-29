@@ -36,7 +36,7 @@ Claude Desktop と Codex Desktop が MCP を通じて状態を共有し、セッ
 ```json
 "multiai-relay-mcp": {
   "command": "uvx",
-  "args": ["--index-url", "https://test.pypi.org/simple/", "--extra-index-url", "https://pypi.org/simple/", "multiai-relay-mcp==1.1.1"]
+  "args": ["multiai-relay-mcp==1.1.1"]
 }
 ```
 
@@ -50,10 +50,26 @@ Claude Desktop と Codex Desktop が MCP を通じて状態を共有し、セッ
 ```toml
 [mcp_servers.multiai-relay-mcp]
 command = 'uvx'
-args = ['--index-url', 'https://test.pypi.org/simple/', '--extra-index-url', 'https://pypi.org/simple/', 'multiai-relay-mcp==1.1.1']
+args = ['multiai-relay-mcp==1.1.1']
 ```
 
 > 追加後は Codex Desktop を再起動。
+
+### 開発版（TestPyPI）を使う場合
+
+最新のプレビュー版は TestPyPI で配布しています。TestPyPI から取得する場合は `args` を次のようにします（依存パッケージ解決のため本番 PyPI を `--extra-index-url` に指定）:
+
+**Claude Desktop:**
+
+```json
+"args": ["--index-url", "https://test.pypi.org/simple/", "--extra-index-url", "https://pypi.org/simple/", "multiai-relay-mcp==1.1.1"]
+```
+
+**Codex Desktop:**
+
+```toml
+args = ['--index-url', 'https://test.pypi.org/simple/', '--extra-index-url', 'https://pypi.org/simple/', 'multiai-relay-mcp==1.1.1']
+```
 
 ### バージョンアップ手順
 
@@ -71,7 +87,7 @@ args = ['--index-url', 'https://test.pypi.org/simple/', '--extra-index-url', 'ht
 ```json
 "multiai-relay-mcp": {
   "command": "uvx",
-  "args": ["--index-url", "https://test.pypi.org/simple/", "--extra-index-url", "https://pypi.org/simple/", "multiai-relay-mcp==1.1.1"],
+  "args": ["multiai-relay-mcp==1.1.1"],
   "env": { "MULTIAI_LANG": "en" }
 }
 ```
@@ -276,7 +292,7 @@ Add to `%APPDATA%\Claude\claude_desktop_config.json` (Windows) or `~/Library/App
 ```json
 "multiai-relay-mcp": {
   "command": "uvx",
-  "args": ["--index-url", "https://test.pypi.org/simple/", "--extra-index-url", "https://pypi.org/simple/", "multiai-relay-mcp==1.1.1"]
+  "args": ["multiai-relay-mcp==1.1.1"]
 }
 ```
 
@@ -290,10 +306,26 @@ Add to `~/.codex/config.toml`:
 ```toml
 [mcp_servers.multiai-relay-mcp]
 command = 'uvx'
-args = ['--index-url', 'https://test.pypi.org/simple/', '--extra-index-url', 'https://pypi.org/simple/', 'multiai-relay-mcp==1.1.1']
+args = ['multiai-relay-mcp==1.1.1']
 ```
 
 > Restart Codex Desktop after editing.
+
+### Using the development version (TestPyPI)
+
+Preview builds are published on TestPyPI. To install from TestPyPI, set `args` as follows (production PyPI is added via `--extra-index-url` for dependency resolution):
+
+**Claude Desktop:**
+
+```json
+"args": ["--index-url", "https://test.pypi.org/simple/", "--extra-index-url", "https://pypi.org/simple/", "multiai-relay-mcp==1.1.1"]
+```
+
+**Codex Desktop:**
+
+```toml
+args = ['--index-url', 'https://test.pypi.org/simple/', '--extra-index-url', 'https://pypi.org/simple/', 'multiai-relay-mcp==1.1.1']
+```
 
 ### Upgrading
 
@@ -311,7 +343,7 @@ Set `MULTIAI_LANG=en` to switch all tool responses and HANDOFF.md headings to En
 ```json
 "multiai-relay-mcp": {
   "command": "uvx",
-  "args": ["--index-url", "https://test.pypi.org/simple/", "--extra-index-url", "https://pypi.org/simple/", "multiai-relay-mcp==1.1.1"],
+  "args": ["multiai-relay-mcp==1.1.1"],
   "env": { "MULTIAI_LANG": "en" }
 }
 ```

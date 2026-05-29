@@ -28,7 +28,7 @@
 ```json
 "multiai-relay-mcp": {
   "command": "uvx",
-  "args": ["--index-url", "https://test.pypi.org/simple/", "--extra-index-url", "https://pypi.org/simple/", "multiai-relay-mcp==1.1.1"]
+  "args": ["multiai-relay-mcp==1.1.1"]
 }
 ```
 
@@ -36,6 +36,10 @@
 
 > `uvx` のフルパスが必要な場合は `where uvx`（Windows）または `which uvx`（Mac/Linux）で確認。
 > 追加後は Claude Desktop を再起動。
+
+> **開発版（TestPyPI）を使う場合:** 最新プレビューは TestPyPI で配布しています。`args` を
+> `["--index-url", "https://test.pypi.org/simple/", "--extra-index-url", "https://pypi.org/simple/", "multiai-relay-mcp==1.1.1"]`
+> にすると TestPyPI を参照します（依存解決のため本番 PyPI を `--extra-index-url` に指定）。
 
 ---
 
