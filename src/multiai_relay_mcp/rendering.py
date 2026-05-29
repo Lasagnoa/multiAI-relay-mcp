@@ -171,7 +171,7 @@ def _build_handoff(state: dict, from_ai: str, to_ai: str) -> str:
         ] + ([f"- `{fp}`" for fp in all_files] if all_files else [f"- {_empty}"]) + [
             "",
             t("handoff.debug_issues"),
-        ] + ([_fmt_issue(i) for i in issues if isinstance(i, dict) and not i.get("resolved")]
+        ] + ([_fmt_issue(i) for i in issues]
              if issues else [f"- {_empty}"]) + [
             "",
             t("handoff.debug_priority"),

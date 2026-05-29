@@ -1015,10 +1015,13 @@ def collab_update_issue(
                 else:
                     current_tags = issue.get("tags", [])
                     if add_tags:
-                        for tg in add_tags:
-                            if tg not in current_tags:
-                                current_tags.append(tg)
-                        issue["tags"] = current_tags[:_MAX_TAGS]
+                        new_tags = [tg for tg in add_tags if tg not in current_tags]
+                        combined = len(current_tags) + len(new_tags)
+                        if combined > _MAX_TAGS:
+                            # サイレント切り捨てを防ぐためエラーを返す（last_updated のみ更新される）
+                            return t("update_issue.err_tags_overflow",
+                                     max=_MAX_TAGS, combined=combined)
+                        issue["tags"] = current_tags + new_tags
                     if remove_tags:
                         issue["tags"] = [tg for tg in issue.get("tags", []) if tg not in remove_tags]
 
@@ -1028,10 +1031,13 @@ def collab_update_issue(
                 else:
                     current_files = issue.get("related_files", [])
                     if add_related_files:
-                        for f in add_related_files:
-                            if f not in current_files:
-                                current_files.append(f)
-                        issue["related_files"] = current_files[:_MAX_RELATED_FILES]
+                        new_files = [f for f in add_related_files if f not in current_files]
+                        combined = len(current_files) + len(new_files)
+                        if combined > _MAX_RELATED_FILES:
+                            # サイレント切り捨てを防ぐためエラーを返す
+                            return t("update_issue.err_files_overflow",
+                                     max=_MAX_RELATED_FILES, combined=combined)
+                        issue["related_files"] = current_files + new_files
                     if remove_related_files:
                         issue["related_files"] = [f for f in issue.get("related_files", [])
                                                    if f not in remove_related_files]
