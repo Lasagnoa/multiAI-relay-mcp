@@ -74,7 +74,7 @@ _STATE_SCHEMA_VERSION = "1.0"
 
 # 状態ファイルの必須キーとデフォルト値（スキーマ検証・補完用）
 _STATE_DEFAULTS: dict = {
-    "version":                 "1.0",
+    "version":                 _STATE_SCHEMA_VERSION,  # 定数と同期させドリフトを防ぐ
     "project_name":            "不明",
     "current_ai":              "claude",
     "mode":                    "implement",

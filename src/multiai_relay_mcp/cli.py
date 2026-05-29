@@ -33,10 +33,14 @@ def _load_cli_config() -> dict:
         cfg_file = _cli_config_file()
         if cfg_file.exists():
             with open(cfg_file, "r", encoding="utf-8-sig") as f:
-                for ai, cfg in json.load(f).items():
-                    config.setdefault(ai, {}).update(cfg)
-    except RuntimeError:
-        # プロジェクト未設定の場合はデフォルト設定を返す
+                loaded = json.load(f)
+                # JSON がオブジェクト（dict）でない場合は無視する
+                if isinstance(loaded, dict):
+                    for ai, cfg in loaded.items():
+                        if isinstance(cfg, dict):
+                            config.setdefault(ai, {}).update(cfg)
+    except Exception:
+        # プロジェクト未設定・ファイル破損・JSON不正 等はすべてデフォルト設定で続行
         pass
     return config
 

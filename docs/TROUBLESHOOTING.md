@@ -210,7 +210,8 @@ collab_switch_project("D:\\path\\to\\project")
 AI_STATE.json
 AI_STATE.archive.json
 AI_STATE.lock
-AI_STATE.*.export.json
+AI_STATE_backup_*.json
+AI_STATE_before_import_*.json
 HANDOFF.md
 ai_sessions/
 cli_config.json

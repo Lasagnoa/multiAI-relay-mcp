@@ -325,6 +325,13 @@ def collab_doctor(
                 proj = None
             sf   = (proj / "AI_STATE.json") if proj and proj.exists() else None
 
+            # raw JSON を一度だけ読んで全チェックで共用する（A-01: 3重読み込み解消）
+            _cached_raw: dict | None = None
+            _cached_has_bom: bool   = False
+            _cached_raw_err: str | None = None
+            if sf and sf.exists():
+                _cached_raw, _cached_has_bom, _cached_raw_err = state_mod.read_raw_state_json(sf)
+
             #region プロジェクトフォルダ確認
             if proj is None:
                 warn("project_unset", t("doctor.project_unset"), t("doctor.project_unset_sug"))
@@ -337,11 +344,10 @@ def collab_doctor(
 
             #region エンコーディング確認（BOM検出）
             if check_encoding and sf and sf.exists():
-                raw_data, has_bom, raw_err = state_mod.read_raw_state_json(sf)
-                if raw_err:
-                    err("encoding_parse", t("doctor.encoding_parse_err", err=raw_err),
+                if _cached_raw_err:
+                    err("encoding_parse", t("doctor.encoding_parse_err", err=_cached_raw_err),
                         t("doctor.encoding_parse_sug"))
-                elif has_bom:
+                elif _cached_has_bom:
                     warn("bom_detected", t("doctor.bom_detected"),
                          t("doctor.bom_detected_sug"))
                 else:
@@ -350,7 +356,7 @@ def collab_doctor(
 
             #region スキーマ確認（raw JSON で正規化前の状態を検査）
             if check_schema and sf and sf.exists():
-                raw_data, _, raw_err = state_mod.read_raw_state_json(sf)
+                raw_data = _cached_raw
                 if raw_data is not None:
                     # バージョン確認
                     raw_ver = raw_data.get("version", "(なし)")
@@ -398,8 +404,8 @@ def collab_doctor(
 
             #region Issue 整合性確認（raw JSON で正規化前の状態を検査）
             if check_issues and sf and sf.exists():
-                raw_data, _, _ = state_mod.read_raw_state_json(sf)
-                if raw_data is not None:
+                if _cached_raw is not None:
+                    raw_data = _cached_raw
                     for list_key in ("known_issues", "resolved_issues"):
                         issues = raw_data.get(list_key, [])
                         if not isinstance(issues, list):
@@ -536,9 +542,10 @@ def collab_doctor(
 
             #region AI 呼び出し確認（高コスト・オプション）
             if check_ai_call:
+                # _load_cli_config はループ外で1回だけ呼ぶ（A-02: 重複読み込み解消）
+                _ai_call_config = _load_cli_config()
                 for ai_name in VALID_AI:
-                    config = _load_cli_config()
-                    cfg    = config.get(ai_name, {})
+                    cfg    = _ai_call_config.get(ai_name, {})
                     cmd    = cfg.get("command", DEFAULT_CLI_CONFIG[ai_name]["command"])
                     path   = _resolve_cli_path(ai_name, cmd)
                     if not path:
@@ -570,7 +577,8 @@ def collab_doctor(
                 if archive.exists():
                     size_kb = archive.stat().st_size // 1024
                     ok("recovery_archive", t("doctor.recovery_archive", size_kb=size_kb))
-                exports = list(proj.glob("*.export.json"))
+                exports = (list(proj.glob("AI_STATE_backup_*.json"))
+                           + list(proj.glob("AI_STATE_before_import_*.json")))
                 if exports:
                     ok("recovery_export", t("doctor.recovery_export", count=len(exports)))
             #endregion
@@ -818,8 +826,10 @@ def collab_record_issue(
     """
     try:
         with state_mod.project_context(project_path):
-            tags         = tags or []
+            tags          = tags or []
             related_files = related_files or []
+            # category が None で渡された場合のフォールバック（型アノテーション違反の防御）
+            category      = category or "general"
 
             # 入力検証
             err = (_validate_input(message, "message")
@@ -1495,8 +1505,15 @@ def collab_setup_cli(
             cfg_file = _cli_config_file()
             config = {}
             if cfg_file.exists():
-                with open(cfg_file, "r", encoding="utf-8-sig") as f:
-                    config = json.load(f)
+                try:
+                    with open(cfg_file, "r", encoding="utf-8-sig") as f:
+                        loaded = json.load(f)
+                    # JSON がオブジェクトでない場合は上書き（破損ファイルの復旧）
+                    if isinstance(loaded, dict):
+                        config = loaded
+                except Exception:
+                    # cli_config.json が破損していた場合は空から上書きして修復する
+                    pass
 
             config[ai] = {"command": command, "args_before": args_before, "args_after": args_after}
             _write_atomic(cfg_file, json.dumps(config, ensure_ascii=False, indent=2))
