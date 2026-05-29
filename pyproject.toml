@@ -23,6 +23,12 @@ classifiers = [
 dependencies = ["mcp[cli]>=1.0.0"]
 
 
+[project.urls]
+Homepage = "https://github.com/Lasagnoa/multiAI-relay-mcp"
+Repository = "https://github.com/Lasagnoa/multiAI-relay-mcp"
+Issues = "https://github.com/Lasagnoa/multiAI-relay-mcp/issues"
+Changelog = "https://github.com/Lasagnoa/multiAI-relay-mcp/blob/main/CHANGELOG.md"
+
 [project.scripts]
 multiai-relay-mcp = "multiai_relay_mcp.server:main"
 

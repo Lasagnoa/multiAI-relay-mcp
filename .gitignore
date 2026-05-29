@@ -36,3 +36,6 @@ Thumbs.db
 *.swo
 .idea/
 .vscode/
+
+# 開発内部資料（GitHub・PyPI 双方に公開しない）
+Doc/
