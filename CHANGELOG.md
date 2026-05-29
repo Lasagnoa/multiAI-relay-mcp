@@ -2,6 +2,43 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.1.1] — 2026-05-29
+
+### Fixed
+
+- **Crash hardening for corrupted `AI_STATE.json`**: tools no longer raise an
+  unhandled `TypeError` / `AttributeError` when the state file's top level is not
+  a JSON object (e.g. an array or string from a manual edit or corruption).
+  `_load_state` and `collab_doctor` now report a clear error instead of crashing —
+  important because `collab_doctor` is the very tool you reach for when state is broken.
+- **`collab_doctor` recovery check**: fixed a glob that never matched the actual
+  backup filenames (`AI_STATE_backup_*.json`, `AI_STATE_before_import_*.json`),
+  so backup files are now detected and reported correctly.
+- **CLI config robustness**: a corrupted `cli_config.json` no longer crashes
+  `collab_consult` / `collab_discuss` / `collab_request_review` / `collab_setup_cli`;
+  invalid content now falls back to defaults (was: only `RuntimeError` caught,
+  so `json.JSONDecodeError` propagated and killed the call).
+- **`collab_record_issue`**: passing `category=None` no longer raises `TypeError`.
+- **`collab_update_issue`**: `add_tags` / `add_related_files` that would exceed the
+  limit now return a clear error instead of silently truncating the list.
+- **`collab_timeline`**: the `since` parameter is now validated as ISO 8601;
+  malformed values return an error instead of producing misleading string-order results.
+- BOM stripping in the raw state reader no longer risks removing body bytes that
+  happen to match BOM bytes (now strips exactly the 3-byte BOM when present).
+
+### Changed
+
+- `collab_doctor` reads the raw state file once and caches it across all check
+  blocks (previously read up to three times).
+- New projects created by `collab_switch_project` now include an explicit
+  `version` field, matching the schema validator's expectations (no spurious
+  `collab_doctor` schema warning right after creation).
+- `_STATE_DEFAULTS["version"]` now references `_STATE_SCHEMA_VERSION` to avoid drift.
+- Removed a dead filter in the debug HANDOFF template (`known_issues` never carries
+  a `resolved` flag).
+- Fixed a stray non-Japanese character in a docstring; minor variable-name consistency
+  cleanup in `collab_doctor`.
+
 ## [1.1.0] — 2026-05-28
 
 ### Added

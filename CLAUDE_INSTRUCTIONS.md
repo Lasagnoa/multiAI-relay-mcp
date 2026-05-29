@@ -28,7 +28,7 @@
 ```json
 "multiai-relay-mcp": {
   "command": "uvx",
-  "args": ["--index-url", "https://test.pypi.org/simple/", "--extra-index-url", "https://pypi.org/simple/", "multiai-relay-mcp==1.1.0"]
+  "args": ["--index-url", "https://test.pypi.org/simple/", "--extra-index-url", "https://pypi.org/simple/", "multiai-relay-mcp==1.1.1"]
 }
 ```
 

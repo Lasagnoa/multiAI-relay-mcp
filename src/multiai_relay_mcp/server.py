@@ -2205,7 +2205,7 @@ def collab_set_handoff_template(preset: str = "full", project_path: str = '') ->
 
 #region エントリポイント
 
-_VERSION = "1.1.0"
+_VERSION = "1.1.1"
 
 # ヘルプテキスト（AIが読むことを想定して日本語で詳述）
 _HELP_TEXT = f"""\

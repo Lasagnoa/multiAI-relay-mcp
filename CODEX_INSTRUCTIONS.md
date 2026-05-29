@@ -28,7 +28,7 @@
 ```toml
 [mcp_servers.multiai-relay-mcp]
 command = 'uvx'
-args = ['--index-url', 'https://test.pypi.org/simple/', '--extra-index-url', 'https://pypi.org/simple/', 'multiai-relay-mcp==1.1.0']
+args = ['--index-url', 'https://test.pypi.org/simple/', '--extra-index-url', 'https://pypi.org/simple/', 'multiai-relay-mcp==1.1.1']
 ```
 
 > **バージョンアップ手順:** バージョン番号を新バージョンに書き換え → `uv cache clean` 実行 → Codex Desktop 再起動 → `collab_summary()` で確認。

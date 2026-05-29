@@ -36,7 +36,7 @@ Claude Desktop と Codex Desktop が MCP を通じて状態を共有し、セッ
 ```json
 "multiai-relay-mcp": {
   "command": "uvx",
-  "args": ["--index-url", "https://test.pypi.org/simple/", "--extra-index-url", "https://pypi.org/simple/", "multiai-relay-mcp==1.1.0"]
+  "args": ["--index-url", "https://test.pypi.org/simple/", "--extra-index-url", "https://pypi.org/simple/", "multiai-relay-mcp==1.1.1"]
 }
 ```
 
@@ -50,7 +50,7 @@ Claude Desktop と Codex Desktop が MCP を通じて状態を共有し、セッ
 ```toml
 [mcp_servers.multiai-relay-mcp]
 command = 'uvx'
-args = ['--index-url', 'https://test.pypi.org/simple/', '--extra-index-url', 'https://pypi.org/simple/', 'multiai-relay-mcp==1.1.0']
+args = ['--index-url', 'https://test.pypi.org/simple/', '--extra-index-url', 'https://pypi.org/simple/', 'multiai-relay-mcp==1.1.1']
 ```
 
 > 追加後は Codex Desktop を再起動。
@@ -71,7 +71,7 @@ args = ['--index-url', 'https://test.pypi.org/simple/', '--extra-index-url', 'ht
 ```json
 "multiai-relay-mcp": {
   "command": "uvx",
-  "args": ["--index-url", "https://test.pypi.org/simple/", "--extra-index-url", "https://pypi.org/simple/", "multiai-relay-mcp==1.1.0"],
+  "args": ["--index-url", "https://test.pypi.org/simple/", "--extra-index-url", "https://pypi.org/simple/", "multiai-relay-mcp==1.1.1"],
   "env": { "MULTIAI_LANG": "en" }
 }
 ```
@@ -276,7 +276,7 @@ Add to `%APPDATA%\Claude\claude_desktop_config.json` (Windows) or `~/Library/App
 ```json
 "multiai-relay-mcp": {
   "command": "uvx",
-  "args": ["--index-url", "https://test.pypi.org/simple/", "--extra-index-url", "https://pypi.org/simple/", "multiai-relay-mcp==1.1.0"]
+  "args": ["--index-url", "https://test.pypi.org/simple/", "--extra-index-url", "https://pypi.org/simple/", "multiai-relay-mcp==1.1.1"]
 }
 ```
 
@@ -290,7 +290,7 @@ Add to `~/.codex/config.toml`:
 ```toml
 [mcp_servers.multiai-relay-mcp]
 command = 'uvx'
-args = ['--index-url', 'https://test.pypi.org/simple/', '--extra-index-url', 'https://pypi.org/simple/', 'multiai-relay-mcp==1.1.0']
+args = ['--index-url', 'https://test.pypi.org/simple/', '--extra-index-url', 'https://pypi.org/simple/', 'multiai-relay-mcp==1.1.1']
 ```
 
 > Restart Codex Desktop after editing.
@@ -311,7 +311,7 @@ Set `MULTIAI_LANG=en` to switch all tool responses and HANDOFF.md headings to En
 ```json
 "multiai-relay-mcp": {
   "command": "uvx",
-  "args": ["--index-url", "https://test.pypi.org/simple/", "--extra-index-url", "https://pypi.org/simple/", "multiai-relay-mcp==1.1.0"],
+  "args": ["--index-url", "https://test.pypi.org/simple/", "--extra-index-url", "https://pypi.org/simple/", "multiai-relay-mcp==1.1.1"],
   "env": { "MULTIAI_LANG": "en" }
 }
 ```
