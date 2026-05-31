@@ -10,6 +10,7 @@ from multiai_relay_mcp.server import (
     collab_switch_project,
     collab_update_issue,
 )
+from multiai_relay_mcp.state import DEFAULT_CLI_CONFIG
 
 
 class ToolValidationTests(unittest.TestCase):
@@ -65,6 +66,12 @@ class ToolValidationTests(unittest.TestCase):
         self.assertIn("CLI設定を保存しました", result)
         config = json.loads((self.project / "cli_config.json").read_text(encoding="utf-8"))
         self.assertEqual(config["codex"]["args_before"], ["exec"])
+
+    def test_default_codex_args_skip_git_repo_check(self):
+        self.assertEqual(
+            DEFAULT_CLI_CONFIG["codex"]["args_before"],
+            ["exec", "--skip-git-repo-check"],
+        )
 
 
 if __name__ == "__main__":

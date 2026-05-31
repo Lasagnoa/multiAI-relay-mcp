@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.1.6] - 2026-06-01
+
+### Changed
+
+- Add `--skip-git-repo-check` to the default Codex CLI arguments
+  (`codex exec --skip-git-repo-check`). This lets `collab_consult()`,
+  `collab_discuss()`, and `collab_request_review()` work in projects that are
+  not Git repositories, such as local design/prototype folders.
+- Document the Codex Git repository check and the equivalent
+  `collab_setup_cli()` override for projects with an existing `cli_config.json`.
+
 ## [1.1.5] - 2026-06-01
 
 ### Fixed

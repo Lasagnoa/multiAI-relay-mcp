@@ -2745,7 +2745,7 @@ def collab_set_handoff_template(preset: str = "full", project_path: str = '') ->
 
 #region エントリポイント
 
-_VERSION = "1.1.5"
+_VERSION = "1.1.6"
 
 # ヘルプテキスト（AIが読むことを想定して日本語で詳述）
 _HELP_TEXT = f"""\
@@ -2814,6 +2814,8 @@ MCPツール一覧（Claude Desktop / Codex Desktop から自動呼び出し）:
   collab_switch_project() / collab_status() のGit連携はstdio環境でも安全に動作します。
   v1.1.5以降、ツール入力の型検証を強化し、異常なJSON入力でもMCPサーバー例外や
   不正な cli_config.json 保存が起きにくくなりました。
+  v1.1.6以降、Codex CLIの既定引数に --skip-git-repo-check を含め、
+  git管理外プロジェクトでも collab_consult/discuss/request_review が動作しやすくしました。
   直近のプロジェクトはユーザー領域の小さな復元用マーカーにも保存されるため、
   再起動後も復元されることがあります。複数プロジェクトを扱う場合は、
   書き込み前に collab_switch_project() または project_path= で対象を明示してください。

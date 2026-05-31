@@ -1,4 +1,4 @@
-# トラブルシューティング / Troubleshooting
+﻿# トラブルシューティング / Troubleshooting
 
 このドキュメントでは、multiAI-relay-mcp の既知制限・よくあるエラーと解決法をまとめます。
 
@@ -131,7 +131,23 @@ collab_setup_cli("codex",  "C:\\フルパス\\to\\codex.exe")
 
 ---
 
-### 3-4. uvx がパッケージを見つけられない
+### 3-4. Codex CLI が git 管理外フォルダで拒否する
+
+**症状:** `collab_consult(ai="codex", ...)` / `collab_discuss()` / `collab_request_review()` が、`Not inside a trusted directory` や `--skip-git-repo-check` 未指定という内容の応答を返す。
+
+**原因:** Codex CLI は既定で git リポジトリ外の `codex exec` 実行を拒否することがあります。v1.1.6以降のMCP既定設定では `--skip-git-repo-check` を付けていますが、既存プロジェクトの `cli_config.json` がCodex設定を上書きしている場合は古い引数が残ります。
+
+**対処:**
+
+```
+collab_setup_cli("codex", "codex", args_before=["exec", "--skip-git-repo-check"])
+```
+
+フルパスの `codex.exe` / `codex.cmd` を使う場合も、`args_before` は同じです。
+
+---
+
+### 3-5. uvx がパッケージを見つけられない
 
 **症状:** `No solution found when resolving ... multiai-relay-mcp`
 
@@ -151,7 +167,7 @@ uv cache clean
 
 ---
 
-### 3-5. バージョンが上がらない（再起動後も古いバージョンのまま）
+### 3-6. バージョンが上がらない（再起動後も古いバージョンのまま）
 
 **症状:** `collab_version()` で古いバージョンが返る。
 
@@ -165,7 +181,7 @@ uv cache clean
 
 ---
 
-### 3-6. collab_switch_project / collab_status がタイムアウトする
+### 3-7. collab_switch_project / collab_status がタイムアウトする
 
 **症状:**
 `collab_current_project()` や `collab_summary()` は返るが、`collab_switch_project()` または `collab_status()` がタイムアウトする。
@@ -184,7 +200,7 @@ uv cache clean multiai-relay-mcp --force
 
 ---
 
-### 3-7. プロジェクトが未設定エラー
+### 3-8. プロジェクトが未設定エラー
 
 **症状:** `現在のプロジェクトが設定されていません`
 
@@ -200,7 +216,7 @@ collab_switch_project("D:\\path\\to\\project")
 
 ---
 
-### 3-8. 不正なツール引数で TypeError が出る / cli_config.json が壊れる
+### 3-9. 不正なツール引数で TypeError が出る / cli_config.json が壊れる
 
 **症状:** `collab_add_note(message=123)` のような型違い入力や、`collab_setup_cli(args_before=["exec", 123])` のような設定でMCPサーバー例外が出る。または `cli_config.json` に文字列以外の引数が保存される。
 
@@ -210,7 +226,7 @@ collab_switch_project("D:\\path\\to\\project")
 
 ---
 
-### 3-8. スキーマバージョン不一致
+### 3-10. スキーマバージョン不一致
 
 **症状:** `collab_doctor()` で `⚠️ WARN  スキーマバージョン不一致` と表示される。
 
@@ -271,3 +287,4 @@ collab_doctor(check_encoding=True, check_schema=True, check_issues=True,
 ---
 
 *詳細は [README.md](../README.md) を参照してください。*
+

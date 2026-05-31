@@ -1,4 +1,4 @@
-# multiAI-relay-mcp
+﻿# multiAI-relay-mcp
 
 **日本語** | [English](#english)
 
@@ -17,6 +17,7 @@ Claude Desktop と Codex Desktop が MCP を通じて状態を共有し、セッ
 - 🔤 **日本語文字コード診断** — `collab_encoding_report()` でUTF-8保存・表示コードページ・CLI入出力を切り分け
 - 🛡️ **stdio 安定化** — v1.1.4 以降、Git 情報取得の子プロセスは MCP stdio 入力を継承せず、Windows でも `collab_status` / `collab_switch_project` が詰まりにくい
 - 🧪 **堅牢な入力検証** — v1.1.5 以降、異常なJSON入力でもMCPサーバー例外や不正な `cli_config.json` 保存を防止
+- 🧭 **非Gitプロジェクト対応** — v1.1.6 以降、既定の Codex CLI 呼び出しに `--skip-git-repo-check` を含め、git管理外フォルダでも相談系ツールが動作
 - 📦 **プロジェクト外への書き込みを最小化** — 状態本体はプロジェクト内、直近プロジェクト情報のみホーム配下に保存
 
 > **設計上の制約:** MCP サーバーは Desktop アプリごとに独立したプロセスとして起動されます。  
@@ -47,7 +48,7 @@ Claude Desktop と Codex Desktop が MCP を通じて状態を共有し、セッ
 
 > `uvx` のフルパスが必要な場合は `where uvx`（Windows）または `which uvx`（Mac/Linux）で確認。  
 > 追加後は Claude Desktop を再起動。
-> 特定バージョンで固定したい場合は `args` を `["--from", "multiai-relay-mcp==1.1.5", "multiai-relay-mcp"]` のように指定できます。
+> 特定バージョンで固定したい場合は `args` を `["--from", "multiai-relay-mcp==1.1.6", "multiai-relay-mcp"]` のように指定できます。
 
 ### 2. Codex Desktop の設定
 
@@ -60,7 +61,7 @@ args = ['multiai-relay-mcp']
 ```
 
 > 追加後は Codex Desktop を再起動。
-> 特定バージョンで固定したい場合は `args = ['--from', 'multiai-relay-mcp==1.1.5', 'multiai-relay-mcp']` のように指定できます。
+> 特定バージョンで固定したい場合は `args = ['--from', 'multiai-relay-mcp==1.1.6', 'multiai-relay-mcp']` のように指定できます。
 
 ### 開発版（TestPyPI）を使う場合
 
@@ -84,7 +85,15 @@ args = ['--index-url', 'https://test.pypi.org/simple/', '--extra-index-url', 'ht
 2. Desktop を再起動
 3. `collab_version()` でバージョンを確認
 
-v1.1.5 は v1.1.4 の stdio/Gitタイムアウト修正に加え、ツール入力検証と `collab_setup_cli()` の設定保存安全性を強化しています。該当症状がある場合は、キャッシュクリア後に必ず Desktop アプリを再起動してください。
+v1.1.6 は v1.1.5 の入力検証強化に加え、既定の Codex CLI 引数へ `--skip-git-repo-check` を追加しています。該当症状がある場合は、キャッシュクリア後に必ず Desktop アプリを再起動してください。
+
+### Codex CLIをgit管理外プロジェクトで使う場合
+
+v1.1.6以降の既定設定では `codex exec --skip-git-repo-check` を使います。既に `cli_config.json` でCodex設定を上書きしているプロジェクトでは、必要に応じて次のように更新してください。
+
+```
+collab_setup_cli("codex", "codex", args_before=["exec", "--skip-git-repo-check"])
+```
 
 ### 英語モードを有効にする（オプション）
 
@@ -287,6 +296,7 @@ A collaborative development system that lets Claude Desktop and Codex Desktop sh
 - 🛡️ **stdio hardening** — Since v1.1.4, Git metadata subprocesses do not inherit the MCP stdio input pipe, avoiding `collab_status` / `collab_switch_project` stalls on Windows
 - 🔤 **Japanese encoding diagnostics** — `collab_encoding_report()` helps diagnose UTF-8 file, console code page, and CLI I/O issues
 - 🧪 **Robust input validation** — Since v1.1.5, malformed JSON inputs no longer leak MCP server exceptions or corrupt `cli_config.json`
+- 🧭 **Non-Git project support** — Since v1.1.6, the default Codex CLI call includes `--skip-git-repo-check` so consultation tools work outside Git repositories
 - 📦 **Minimal writes outside project folder** — Project state stays in the project folder; only a small last-project marker is kept under the user home directory
 
 > **Design constraint:** The MCP server runs as a separate process per Desktop app.  
@@ -316,7 +326,7 @@ Add to `%APPDATA%\Claude\claude_desktop_config.json` (Windows) or `~/Library/App
 
 > Use `where uvx` (Windows) or `which uvx` (Mac/Linux) to find the full path if needed.  
 > Restart Claude Desktop after editing.
-> To pin a specific release, use `["--from", "multiai-relay-mcp==1.1.5", "multiai-relay-mcp"]` for `args`.
+> To pin a specific release, use `["--from", "multiai-relay-mcp==1.1.6", "multiai-relay-mcp"]` for `args`.
 
 ### 2. Codex Desktop configuration
 
@@ -329,7 +339,7 @@ args = ['multiai-relay-mcp']
 ```
 
 > Restart Codex Desktop after editing.
-> To pin a specific release, use `args = ['--from', 'multiai-relay-mcp==1.1.5', 'multiai-relay-mcp']`.
+> To pin a specific release, use `args = ['--from', 'multiai-relay-mcp==1.1.6', 'multiai-relay-mcp']`.
 
 ### Using the development version (TestPyPI)
 
@@ -353,7 +363,15 @@ args = ['--index-url', 'https://test.pypi.org/simple/', '--extra-index-url', 'ht
 2. Restart Desktop apps
 3. Confirm with `collab_version()`
 
-v1.1.5 includes the v1.1.4 Windows stdio/Git timeout fix and also hardens tool input validation and `collab_setup_cli()` config writes. If you saw those symptoms, clear the uv cache and restart the Desktop app so the new server process is launched.
+v1.1.6 includes the v1.1.5 input validation hardening and adds `--skip-git-repo-check` to the default Codex CLI arguments. If you saw those symptoms, clear the uv cache and restart the Desktop app so the new server process is launched.
+
+### Using Codex CLI outside Git repositories
+
+Since v1.1.6, the default configuration calls `codex exec --skip-git-repo-check`. If a project already overrides Codex in `cli_config.json`, update it when needed:
+
+```
+collab_setup_cli("codex", "codex", args_before=["exec", "--skip-git-repo-check"])
+```
 
 ### Enabling English mode (optional)
 
@@ -545,3 +563,4 @@ For Japanese encoding issues, run `collab_encoding_report()` and see `docs/ENCOD
 ## License
 
 MIT License
+

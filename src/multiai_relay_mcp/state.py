@@ -38,7 +38,7 @@ DEFAULT_CLI_CONFIG: dict = {
     },
     "codex": {
         "command":     "codex",
-        "args_before": ["exec"],
+        "args_before": ["exec", "--skip-git-repo-check"],
         "args_after":  [],
     },
 }
