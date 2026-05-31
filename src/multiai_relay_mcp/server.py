@@ -2723,7 +2723,7 @@ def collab_set_handoff_template(preset: str = "full", project_path: str = '') ->
 
 #region エントリポイント
 
-_VERSION = "1.1.3"
+_VERSION = "1.1.4"
 
 # ヘルプテキスト（AIが読むことを想定して日本語で詳述）
 _HELP_TEXT = f"""\
@@ -2731,9 +2731,12 @@ multiAI-relay-mcp v{_VERSION}
 ClaudeとCodexが共有状態を通じて協調開発するためのMCPサーバーです。
 
 使い方:
-  uvx --from <パッケージディレクトリ> multiai-relay-mcp   # MCPサーバーとして起動（stdio）
-  uvx --from <パッケージディレクトリ> multiai-relay-mcp --help
-  uvx --from <パッケージディレクトリ> multiai-relay-mcp --version
+  uvx multiai-relay-mcp                         # PyPI版をMCPサーバーとして起動（stdio）
+  uvx multiai-relay-mcp --help
+  uvx multiai-relay-mcp --version
+
+開発中のローカルソースから起動する場合:
+  uvx --from <パッケージディレクトリ> multiai-relay-mcp
 
 オプション:
   -h, --help     このヘルプを表示して終了
@@ -2785,6 +2788,8 @@ MCPツール一覧（Claude Desktop / Codex Desktop から自動呼び出し）:
   作業対象プロジェクトを変更できます。
   プロジェクトパスはプロセスメモリとユーザー領域の復元用マーカーに保持されます。
   AI_STATE.json などの状態本体はプロジェクトフォルダ内に保存されます。
+  v1.1.4以降、Git情報取得用の子プロセスはMCP stdio入力を継承しないため、
+  collab_switch_project() / collab_status() のGit連携はstdio環境でも安全に動作します。
 
 書き込み先ファイル（プロジェクトフォルダ内のみ）:
   AI_STATE.json    状態ファイル

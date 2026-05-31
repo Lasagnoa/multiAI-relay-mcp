@@ -720,6 +720,7 @@ def get_git_info(project_dir: Path) -> dict | None:
         # ブランチ名
         branch_result = subprocess.run(
             base + ["rev-parse", "--abbrev-ref", "HEAD"],
+            stdin=subprocess.DEVNULL,
             capture_output=True, text=False, timeout=5,
         )
         if branch_result.returncode != 0:
@@ -729,6 +730,7 @@ def get_git_info(project_dir: Path) -> dict | None:
         # 最新5件のコミット（短いハッシュ + 件名）
         log_result = subprocess.run(
             base + ["log", "--oneline", "-5"],
+            stdin=subprocess.DEVNULL,
             capture_output=True, text=False, timeout=5,
         )
         commits = [line for line in _decode_process_bytes(log_result.stdout).splitlines() if line.strip()]
@@ -736,6 +738,7 @@ def get_git_info(project_dir: Path) -> dict | None:
         # 未コミット変更の有無
         status_result = subprocess.run(
             base + ["status", "--porcelain"],
+            stdin=subprocess.DEVNULL,
             capture_output=True, text=False, timeout=5,
         )
         is_dirty = bool(_decode_process_bytes(status_result.stdout).strip())

@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.1.4] - 2026-05-31
+
+### Fixed
+
+- Prevent Git metadata probes from inheriting the MCP stdio input pipe. This
+  fixes `collab_switch_project()` and `collab_status()` hanging when they call
+  `git` from a stdio MCP server on Windows.
+
 ## [1.1.3] - 2026-05-31
 
 ### Added

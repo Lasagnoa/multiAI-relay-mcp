@@ -162,7 +162,26 @@ uv cache clean
 
 ---
 
-### 3-6. プロジェクトが未設定エラー
+### 3-6. collab_switch_project / collab_status がタイムアウトする
+
+**症状:**
+`collab_current_project()` や `collab_summary()` は返るが、`collab_switch_project()` または `collab_status()` がタイムアウトする。
+
+**原因:**
+v1.1.3 以前では、Git ブランチやコミットを取得するために起動した `git` 子プロセスが MCP の stdio 入力パイプを継承していました。Windows の stdio MCP 環境では、これが原因で `git` 呼び出しが停止し、Git 情報を表示する `collab_switch_project()` / `collab_status()` だけが詰まることがあります。
+
+**対処:**
+v1.1.4 以降へ更新してください。v1.1.4 では Git 情報取得時に `stdin=subprocess.DEVNULL` を指定し、MCP の JSON-RPC 入力を子プロセスへ渡さないようにしています。
+
+```sh
+uv cache clean multiai-relay-mcp --force
+```
+
+その後 Claude Desktop / Codex Desktop を完全に再起動し、`collab_version()` が `1.1.4` 以上を返すことを確認してください。
+
+---
+
+### 3-7. プロジェクトが未設定エラー
 
 **症状:** `現在のプロジェクトが設定されていません`
 
@@ -178,7 +197,7 @@ collab_switch_project("D:\\path\\to\\project")
 
 ---
 
-### 3-7. スキーマバージョン不一致
+### 3-8. スキーマバージョン不一致
 
 **症状:** `collab_doctor()` で `⚠️ WARN  スキーマバージョン不一致` と表示される。
 

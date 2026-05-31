@@ -15,6 +15,7 @@ Claude Desktop と Codex Desktop が MCP を通じて状態を共有し、セッ
 - 🌐 **多言語対応 (i18n)** — `MULTIAI_LANG=en` で全ツールの出力・HANDOFF.md を英語に切り替え（デフォルトは日本語）
 - 🌿 **Git 統合** — `collab_status` / `collab_switch_project` でブランチ名と最新コミットを自動表示
 - 🔤 **日本語文字コード診断** — `collab_encoding_report()` でUTF-8保存・表示コードページ・CLI入出力を切り分け
+- 🛡️ **stdio 安定化** — v1.1.4 以降、Git 情報取得の子プロセスは MCP stdio 入力を継承せず、Windows でも `collab_status` / `collab_switch_project` が詰まりにくい
 - 📦 **プロジェクト外への書き込みを最小化** — 状態本体はプロジェクト内、直近プロジェクト情報のみホーム配下に保存
 
 > **設計上の制約:** MCP サーバーは Desktop アプリごとに独立したプロセスとして起動されます。  
@@ -44,6 +45,7 @@ Claude Desktop と Codex Desktop が MCP を通じて状態を共有し、セッ
 
 > `uvx` のフルパスが必要な場合は `where uvx`（Windows）または `which uvx`（Mac/Linux）で確認。  
 > 追加後は Claude Desktop を再起動。
+> 特定バージョンで固定したい場合は `args` を `["--from", "multiai-relay-mcp==1.1.4", "multiai-relay-mcp"]` のように指定できます。
 
 ### 2. Codex Desktop の設定
 
@@ -56,6 +58,7 @@ args = ['multiai-relay-mcp']
 ```
 
 > 追加後は Codex Desktop を再起動。
+> 特定バージョンで固定したい場合は `args = ['--from', 'multiai-relay-mcp==1.1.4', 'multiai-relay-mcp']` のように指定できます。
 
 ### 開発版（TestPyPI）を使う場合
 
@@ -78,6 +81,8 @@ args = ['--index-url', 'https://test.pypi.org/simple/', '--extra-index-url', 'ht
 1. キャッシュをクリア: `uv cache clean multiai-relay-mcp --force`
 2. Desktop を再起動
 3. `collab_version()` でバージョンを確認
+
+v1.1.4 は Windows の stdio MCP 環境で `collab_switch_project()` / `collab_status()` が Git 情報取得時にタイムアウトする問題を修正しています。該当症状がある場合は、キャッシュクリア後に必ず Desktop アプリを再起動してください。
 
 ### 英語モードを有効にする（オプション）
 
@@ -277,6 +282,8 @@ A collaborative development system that lets Claude Desktop and Codex Desktop sh
 - 🔒 **Safe Concurrent Writes** — File locking + atomic writes prevent state corruption when Claude and Codex update simultaneously
 - 🌐 **i18n Support** — Set `MULTIAI_LANG=en` to switch all tool output and HANDOFF.md to English (default: Japanese)
 - 🌿 **Git Integration** — `collab_status` / `collab_switch_project` automatically show branch name and latest commit
+- 🛡️ **stdio hardening** — Since v1.1.4, Git metadata subprocesses do not inherit the MCP stdio input pipe, avoiding `collab_status` / `collab_switch_project` stalls on Windows
+- 🔤 **Japanese encoding diagnostics** — `collab_encoding_report()` helps diagnose UTF-8 file, console code page, and CLI I/O issues
 - 📦 **Minimal writes outside project folder** — Project state stays in the project folder; only a small last-project marker is kept under the user home directory
 
 > **Design constraint:** The MCP server runs as a separate process per Desktop app.  
@@ -305,6 +312,7 @@ Add to `%APPDATA%\Claude\claude_desktop_config.json` (Windows) or `~/Library/App
 
 > Use `where uvx` (Windows) or `which uvx` (Mac/Linux) to find the full path if needed.  
 > Restart Claude Desktop after editing.
+> To pin a specific release, use `["--from", "multiai-relay-mcp==1.1.4", "multiai-relay-mcp"]` for `args`.
 
 ### 2. Codex Desktop configuration
 
@@ -317,6 +325,7 @@ args = ['multiai-relay-mcp']
 ```
 
 > Restart Codex Desktop after editing.
+> To pin a specific release, use `args = ['--from', 'multiai-relay-mcp==1.1.4', 'multiai-relay-mcp']`.
 
 ### Using the development version (TestPyPI)
 
@@ -339,6 +348,8 @@ args = ['--index-url', 'https://test.pypi.org/simple/', '--extra-index-url', 'ht
 1. Clear the cache: `uv cache clean multiai-relay-mcp --force`
 2. Restart Desktop apps
 3. Confirm with `collab_version()`
+
+v1.1.4 fixes a Windows stdio MCP timeout where `collab_switch_project()` / `collab_status()` could stall while probing Git metadata. If you saw that symptom, clear the uv cache and restart the Desktop app so the new server process is launched.
 
 ### Enabling English mode (optional)
 
