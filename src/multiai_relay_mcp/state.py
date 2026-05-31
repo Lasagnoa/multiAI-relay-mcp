@@ -3,6 +3,7 @@
 import copy
 import datetime
 import json
+import locale
 import os
 import re
 import subprocess
@@ -18,8 +19,12 @@ from .i18n import t
 
 #region 定数・プロジェクト解決
 
-# 現在のプロジェクトパス（プロセス内メモリのみ。ファイルへの書き出しはしない）
+# 現在のプロジェクトパス（プロセス内メモリ。直近の選択は別途ユーザー領域にも保存する）
 _current_project: Path | None = None
+
+# Persist the last active project outside the MCP process. Desktop MCP clients may
+# respawn the stdio server, so process-local memory alone is not reliable enough.
+_CURRENT_PROJECT_FILE = Path.home() / ".multiai_current_project.json"
 
 # project_path 指定時の一時上書き（ContextVar: 呼び出し1回限り、グローバルを汚さない）
 _project_override: ContextVar[Path | None] = ContextVar("_project_override", default=None)
@@ -109,13 +114,76 @@ def _validate_project_dir(p: Path, label: str = "") -> Path:
     return p
 
 
+def _find_state_file_downward(start: Path, max_depth: int = 4, max_dirs: int = 2000) -> Path | None:
+    """Find a nearby child directory containing AI_STATE.json without scanning the whole drive."""
+    if not start.exists() or not start.is_dir():
+        return None
+
+    queue: list[tuple[Path, int]] = [(start, 0)]
+    visited = 0
+    while queue and visited < max_dirs:
+        current, depth = queue.pop(0)
+        visited += 1
+        if (current / "AI_STATE.json").exists():
+            return current
+        if depth >= max_depth:
+            continue
+        try:
+            children = sorted(
+                (p for p in current.iterdir() if p.is_dir()),
+                key=lambda p: p.name.lower(),
+            )
+        except OSError:
+            continue
+        for child in children:
+            if child.name in {".git", ".venv", "node_modules", "__pycache__"}:
+                continue
+            queue.append((child, depth + 1))
+    return None
+
+
+def _load_persisted_current_project() -> Path | None:
+    """Load the last active project saved by collab_switch_project()."""
+    try:
+        if not _CURRENT_PROJECT_FILE.exists():
+            return None
+        with open(_CURRENT_PROJECT_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        path = Path(str(data.get("path", ""))).expanduser().resolve()
+        if path.is_dir() and (path / "AI_STATE.json").exists():
+            return path
+    except Exception:
+        pass
+    return None
+
+
+def _save_persisted_current_project(path: Path | None) -> None:
+    """Persist or clear the active project marker."""
+    try:
+        if path is None:
+            _CURRENT_PROJECT_FILE.unlink(missing_ok=True)
+            return
+        payload = {"path": str(path), "last_used": _now_iso()}
+        tmp_fd, tmp_path = tempfile.mkstemp(
+            dir=_CURRENT_PROJECT_FILE.parent, suffix=".tmp", prefix=".multiai_current_project_"
+        )
+        with os.fdopen(tmp_fd, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False, indent=2)
+        os.replace(tmp_path, _CURRENT_PROJECT_FILE)
+    except Exception:
+        pass
+
+
 def _get_project_dir() -> Path:
     """
     現在のプロジェクトディレクトリを返す。解決順:
 
     1. ContextVar override（project_path 付き呼び出し時）
     2. _current_project（collab_switch_project で設定）
-    3. cwd 探索（AI_STATE.json が cwd または親に存在する場合のみ）
+    3. persisted current project marker
+    4. cwd / parent search
+    5. recent project registry
+    6. bounded child search
 
     いずれも見つからない場合は RuntimeError。
     """
@@ -128,7 +196,8 @@ def _get_project_dir() -> Path:
     if _current_project is not None:
         return _validate_project_dir(_current_project, t("label.project_dir"))
 
-    # 3. cwd 探索（AI_STATE.json が cwd または祖先に存在する場合のみ採用）
+    # 3. cwd search. Prefer the explicit process working directory before any
+    # persisted fallback to avoid writing to a previous project by accident.
     candidate = Path.cwd()
     while True:
         if (candidate / "AI_STATE.json").exists() and candidate.is_dir():
@@ -137,6 +206,28 @@ def _get_project_dir() -> Path:
         if parent == candidate:  # ルートに達した
             break
         candidate = parent
+
+    # 4. persisted project set by a previous collab_switch_project() call.
+    persisted = _load_persisted_current_project()
+    if persisted is not None:
+        set_current_project(persisted, persist=False)
+        return _validate_project_dir(persisted, t("label.project_dir"))
+
+    # Prefer the most recent existing project from the registry before a broad
+    # child search. A workspace root can contain several AI_STATE.json files.
+    for entry in _load_registry():
+        try:
+            registry_candidate = Path(str(entry.get("path", ""))).expanduser().resolve()
+        except Exception:
+            continue
+        if registry_candidate.is_dir() and (registry_candidate / "AI_STATE.json").exists():
+            set_current_project(registry_candidate, persist=False)
+            return _validate_project_dir(registry_candidate, t("label.project_dir"))
+
+    child_project = _find_state_file_downward(Path.cwd())
+    if child_project is not None:
+        set_current_project(child_project, persist=False)
+        return _validate_project_dir(child_project, t("label.project_dir"))
 
     raise RuntimeError(t("project.not_set"))
 
@@ -232,6 +323,27 @@ def _now_iso() -> str:
 
 def _now_display() -> str:
     return datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _decode_process_bytes(data: bytes) -> str:
+    """Decode subprocess output with UTF-8 first, then the OS preferred encoding."""
+    if not data:
+        return ""
+
+    encodings = ["utf-8-sig"]
+    preferred = locale.getpreferredencoding(False)
+    for enc in (preferred, "cp932", "utf-8"):
+        if enc and enc.lower() not in {e.lower() for e in encodings}:
+            encodings.append(enc)
+
+    for enc in encodings:
+        try:
+            return data.decode(enc)
+        except UnicodeDecodeError:
+            continue
+        except LookupError:
+            continue
+    return data.decode("utf-8", errors="replace")
 
 def _load_state() -> dict:
     """状態ファイルを読み込む（旧フォーマットの自動マイグレーションを含む）"""
@@ -532,8 +644,10 @@ def _state_transaction():
     sf = _state_file()
     with _StateLock(sf):
         state = _load_state()
+        original_state = copy.deepcopy(state)
         yield state
-        _save_state(state)
+        if state != original_state:
+            _save_state(state)
 
 
 def _write_atomic(path: Path, content: str) -> None:
@@ -606,28 +720,25 @@ def get_git_info(project_dir: Path) -> dict | None:
         # ブランチ名
         branch_result = subprocess.run(
             base + ["rev-parse", "--abbrev-ref", "HEAD"],
-            capture_output=True, text=True, timeout=5,
-            encoding="utf-8", errors="replace",
+            capture_output=True, text=False, timeout=5,
         )
         if branch_result.returncode != 0:
             return None  # git リポジトリでない
-        branch = branch_result.stdout.strip()
+        branch = _decode_process_bytes(branch_result.stdout).strip()
 
         # 最新5件のコミット（短いハッシュ + 件名）
         log_result = subprocess.run(
             base + ["log", "--oneline", "-5"],
-            capture_output=True, text=True, timeout=5,
-            encoding="utf-8", errors="replace",
+            capture_output=True, text=False, timeout=5,
         )
-        commits = [line for line in log_result.stdout.splitlines() if line.strip()]
+        commits = [line for line in _decode_process_bytes(log_result.stdout).splitlines() if line.strip()]
 
         # 未コミット変更の有無
         status_result = subprocess.run(
             base + ["status", "--porcelain"],
-            capture_output=True, text=True, timeout=5,
-            encoding="utf-8", errors="replace",
+            capture_output=True, text=False, timeout=5,
         )
-        is_dirty = bool(status_result.stdout.strip())
+        is_dirty = bool(_decode_process_bytes(status_result.stdout).strip())
 
         return {"branch": branch, "commits": commits, "is_dirty": is_dirty}
     except Exception:
@@ -688,10 +799,12 @@ def register_project(path: Path, project_name: str) -> None:
 #endregion
 
 
-def set_current_project(path: Path | None) -> None:
+def set_current_project(path: Path | str | None, persist: bool = True) -> None:
     """Set the process-local active project path."""
     global _current_project
-    _current_project = path
+    _current_project = Path(path).expanduser().resolve() if path is not None else None
+    if persist:
+        _save_persisted_current_project(_current_project)
 
 
 def get_current_project_raw() -> Path | None:

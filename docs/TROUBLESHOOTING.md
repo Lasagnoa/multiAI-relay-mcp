@@ -128,11 +128,11 @@ collab_setup_cli("codex",  "C:\\フルパス\\to\\codex.exe")
 
 ---
 
-### 3-4. uvx がバージョンを見つけられない
+### 3-4. uvx がパッケージを見つけられない
 
-**症状:** `No solution found when resolving ... multiai-relay-mcp==X.X.X`
+**症状:** `No solution found when resolving ... multiai-relay-mcp`
 
-**原因:** uvx のキャッシュが古い、または Test PyPI への反映が遅延している。
+**原因:** uvx のキャッシュが古い、PyPI / TestPyPI への反映が遅延している、または TestPyPI 用の `--index-url` 設定が入っていない。
 
 **対処:**
 

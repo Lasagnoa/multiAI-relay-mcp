@@ -2,6 +2,55 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.1.3] - 2026-05-31
+
+### Added
+
+- Add asynchronous AI CLI job tools:
+  `collab_consult_async()`, `collab_discuss_async()`,
+  `collab_request_review_async()`, `collab_ai_job_status()`,
+  `collab_ai_job_list()`, and `collab_ai_job_cancel()`.
+- Run asynchronous AI CLI requests in a bounded background worker pool so long
+  Claude/Codex CLI calls do not block unrelated MCP status or handoff requests.
+
+## [1.1.2] - 2026-05-31
+
+### Added
+
+- Add `collab_encoding_report()` to diagnose Japanese mojibake issues across
+  Python stdio settings, Windows code pages, environment variables, and project
+  files.
+- Add `docs/ENCODING.md` with UTF-8 operating guidance for Claude/Codex handoff
+  workflows on Windows.
+
+### Fixed
+
+- Persist the active project selected by `collab_switch_project()` in a user-local
+  marker file, so `collab_status()` and handoff tools can recover after Desktop
+  clients respawn the MCP server process.
+- Improve project auto-detection when the MCP server starts from a workspace root:
+  `_get_project_dir()` now checks the current directory and parents, the recent
+  project registry, then a bounded child search for `AI_STATE.json`.
+- Avoid unbounded filesystem scans by limiting child project discovery depth and
+  skipping heavy generated directories such as `.git`, `.venv`, and `node_modules`.
+- Decode Claude/Codex CLI and Git subprocess output from bytes, preferring UTF-8
+  and falling back to the OS preferred encoding/cp932 when needed.
+- `collab_switch_project()` now reports corrupted or non-object `AI_STATE.json`
+  files instead of raising an unhandled exception.
+- `collab_import_state()` now validates import file structure before reading
+  checksum/state fields, and `replace` mode now removes keys that are absent from
+  the imported state.
+- Project auto-detection now prefers the current working directory before the
+  persisted last-project marker, reducing accidental writes to a previous project.
+- No-op or error-returning state transactions no longer update `last_updated`.
+- Generate current task, issue, and pending task IDs from the maximum existing
+  numeric suffix instead of list length, avoiding ID reuse after imports or
+  cleanup.
+- `collab_cleanup_history()` now recomputes trim counts after acquiring the
+  state lock, so concurrent updates are not trimmed using stale totals.
+- `set_current_project()` now normalizes string paths to `Path` objects, making
+  internal tests and integrations less brittle.
+
 ## [1.1.1] — 2026-05-29
 
 ### Fixed

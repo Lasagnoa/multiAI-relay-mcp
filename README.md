@@ -14,11 +14,13 @@ Claude Desktop と Codex Desktop が MCP を通じて状態を共有し、セッ
 - 🔒 **安全な並行書き込み** — ファイルロック＋アトミック書き込みで、Claude/Codex が同時に更新しても状態が壊れない
 - 🌐 **多言語対応 (i18n)** — `MULTIAI_LANG=en` で全ツールの出力・HANDOFF.md を英語に切り替え（デフォルトは日本語）
 - 🌿 **Git 統合** — `collab_status` / `collab_switch_project` でブランチ名と最新コミットを自動表示
-- 📦 **プロジェクトフォルダ外への書き込みゼロ** — ホームディレクトリを汚さない
+- 🔤 **日本語文字コード診断** — `collab_encoding_report()` でUTF-8保存・表示コードページ・CLI入出力を切り分け
+- 📦 **プロジェクト外への書き込みを最小化** — 状態本体はプロジェクト内、直近プロジェクト情報のみホーム配下に保存
 
 > **設計上の制約:** MCP サーバーは Desktop アプリごとに独立したプロセスとして起動されます。  
 > **1 プロセス = 1 セッションデフォルトプロジェクト** です。`collab_switch_project()` でセッション既定を設定し、個別ツール呼び出しでは `project_path=` で別プロジェクトを一時指定できます。  
 > 詳細・復旧手順 → リポジトリ内 `docs/TROUBLESHOOTING.md` を参照
+> 日本語文字化け対策 → リポジトリ内 `docs/ENCODING.md` を参照
 
 ---
 
@@ -36,7 +38,7 @@ Claude Desktop と Codex Desktop が MCP を通じて状態を共有し、セッ
 ```json
 "multiai-relay-mcp": {
   "command": "uvx",
-  "args": ["multiai-relay-mcp==1.1.1"]
+  "args": ["multiai-relay-mcp"]
 }
 ```
 
@@ -50,33 +52,32 @@ Claude Desktop と Codex Desktop が MCP を通じて状態を共有し、セッ
 ```toml
 [mcp_servers.multiai-relay-mcp]
 command = 'uvx'
-args = ['multiai-relay-mcp==1.1.1']
+args = ['multiai-relay-mcp']
 ```
 
 > 追加後は Codex Desktop を再起動。
 
 ### 開発版（TestPyPI）を使う場合
 
-最新のプレビュー版は TestPyPI で配布しています。TestPyPI から取得する場合は `args` を次のようにします（依存パッケージ解決のため本番 PyPI を `--extra-index-url` に指定）:
+最新のプレビュー版は TestPyPI で配布しています。TestPyPI から取得する場合は `args` を次のようにします。TestPyPI を優先し、依存パッケージ解決用に本番 PyPI を `--extra-index-url` に指定します。
 
 **Claude Desktop:**
 
 ```json
-"args": ["--index-url", "https://test.pypi.org/simple/", "--extra-index-url", "https://pypi.org/simple/", "multiai-relay-mcp==1.1.1"]
+"args": ["--index-url", "https://test.pypi.org/simple/", "--extra-index-url", "https://pypi.org/simple/", "multiai-relay-mcp"]
 ```
 
 **Codex Desktop:**
 
 ```toml
-args = ['--index-url', 'https://test.pypi.org/simple/', '--extra-index-url', 'https://pypi.org/simple/', 'multiai-relay-mcp==1.1.1']
+args = ['--index-url', 'https://test.pypi.org/simple/', '--extra-index-url', 'https://pypi.org/simple/', 'multiai-relay-mcp']
 ```
 
 ### バージョンアップ手順
 
-1. 両設定ファイルのバージョン番号を新バージョンに書き換え
-2. キャッシュをクリア: `uv cache clean multiai-relay-mcp --force`
-3. Desktop を再起動
-4. `collab_version()` でバージョンを確認
+1. キャッシュをクリア: `uv cache clean multiai-relay-mcp --force`
+2. Desktop を再起動
+3. `collab_version()` でバージョンを確認
 
 ### 英語モードを有効にする（オプション）
 
@@ -87,7 +88,7 @@ args = ['--index-url', 'https://test.pypi.org/simple/', '--extra-index-url', 'ht
 ```json
 "multiai-relay-mcp": {
   "command": "uvx",
-  "args": ["multiai-relay-mcp==1.1.1"],
+  "args": ["multiai-relay-mcp"],
   "env": { "MULTIAI_LANG": "en" }
 }
 ```
@@ -214,8 +215,14 @@ collab_checkpoint("認証の実装完了。次はテストを書く必要あり"
 | ツール | 用途 |
 |--------|------|
 | `collab_consult(ai, question)` | 相手AIのCLIに相談 |
+| `collab_consult_async(ai, question)` | 相談をバックグラウンドジョブとして投入 |
 | `collab_discuss(ai, topic)` | 相手AIと複数ラウンド議論 |
+| `collab_discuss_async(ai, topic)` | 議論をバックグラウンドジョブとして投入 |
 | `collab_request_review(ai, focus?, scope?)` | 相手AIにコードレビューを依頼 |
+| `collab_request_review_async(ai, focus?, scope?)` | レビュー依頼をバックグラウンドジョブとして投入 |
+| `collab_ai_job_status(job_id)` | 非同期AIジョブの状態と結果を確認 |
+| `collab_ai_job_list()` | 非同期AIジョブの一覧を表示 |
+| `collab_ai_job_cancel(job_id)` | キュー中の非同期AIジョブをキャンセル |
 | `collab_setup_cli(ai, command, ...)` | CLIパス・引数設定をカスタマイズ |
 
 ### メンテナンス
@@ -242,7 +249,7 @@ collab_checkpoint("認証の実装完了。次はテストを書く必要あり"
 | `AI_STATE.lock` | 一時ロックファイル（処理後即削除） |
 | `cli_config.json` | CLI設定（`collab_setup_cli()` 呼び出し時のみ生成） |
 
-> これらはプロジェクトフォルダ内にのみ書き込まれます。ホームディレクトリへの書き込みは一切ありません。
+> 状態本体はプロジェクトフォルダ内に保存されます。Desktop MCPサーバー再起動後の復元用に、直近プロジェクト情報だけホーム配下へ小さく保存します。
 
 ---
 
@@ -270,7 +277,7 @@ A collaborative development system that lets Claude Desktop and Codex Desktop sh
 - 🔒 **Safe Concurrent Writes** — File locking + atomic writes prevent state corruption when Claude and Codex update simultaneously
 - 🌐 **i18n Support** — Set `MULTIAI_LANG=en` to switch all tool output and HANDOFF.md to English (default: Japanese)
 - 🌿 **Git Integration** — `collab_status` / `collab_switch_project` automatically show branch name and latest commit
-- 📦 **Zero writes outside project folder** — No home directory pollution
+- 📦 **Minimal writes outside project folder** — Project state stays in the project folder; only a small last-project marker is kept under the user home directory
 
 > **Design constraint:** The MCP server runs as a separate process per Desktop app.  
 > **1 process = 1 session-default project.** Use `collab_switch_project()` to set the session default. For individual calls targeting a different project, pass `project_path=` to any tool — the session default stays unchanged.
@@ -292,7 +299,7 @@ Add to `%APPDATA%\Claude\claude_desktop_config.json` (Windows) or `~/Library/App
 ```json
 "multiai-relay-mcp": {
   "command": "uvx",
-  "args": ["multiai-relay-mcp==1.1.1"]
+  "args": ["multiai-relay-mcp"]
 }
 ```
 
@@ -306,33 +313,32 @@ Add to `~/.codex/config.toml`:
 ```toml
 [mcp_servers.multiai-relay-mcp]
 command = 'uvx'
-args = ['multiai-relay-mcp==1.1.1']
+args = ['multiai-relay-mcp']
 ```
 
 > Restart Codex Desktop after editing.
 
 ### Using the development version (TestPyPI)
 
-Preview builds are published on TestPyPI. To install from TestPyPI, set `args` as follows (production PyPI is added via `--extra-index-url` for dependency resolution):
+Preview builds are published on TestPyPI. To install from TestPyPI, set `args` as follows. TestPyPI is preferred, and production PyPI is added via `--extra-index-url` for dependency resolution:
 
 **Claude Desktop:**
 
 ```json
-"args": ["--index-url", "https://test.pypi.org/simple/", "--extra-index-url", "https://pypi.org/simple/", "multiai-relay-mcp==1.1.1"]
+"args": ["--index-url", "https://test.pypi.org/simple/", "--extra-index-url", "https://pypi.org/simple/", "multiai-relay-mcp"]
 ```
 
 **Codex Desktop:**
 
 ```toml
-args = ['--index-url', 'https://test.pypi.org/simple/', '--extra-index-url', 'https://pypi.org/simple/', 'multiai-relay-mcp==1.1.1']
+args = ['--index-url', 'https://test.pypi.org/simple/', '--extra-index-url', 'https://pypi.org/simple/', 'multiai-relay-mcp']
 ```
 
 ### Upgrading
 
-1. Change the version number in both config files
-2. Clear the cache: `uv cache clean multiai-relay-mcp --force`
-3. Restart Desktop apps
-4. Confirm with `collab_version()`
+1. Clear the cache: `uv cache clean multiai-relay-mcp --force`
+2. Restart Desktop apps
+3. Confirm with `collab_version()`
 
 ### Enabling English mode (optional)
 
@@ -343,7 +349,7 @@ Set `MULTIAI_LANG=en` to switch all tool responses and HANDOFF.md headings to En
 ```json
 "multiai-relay-mcp": {
   "command": "uvx",
-  "args": ["multiai-relay-mcp==1.1.1"],
+  "args": ["multiai-relay-mcp"],
   "env": { "MULTIAI_LANG": "en" }
 }
 ```
@@ -470,8 +476,14 @@ A `HANDOFF.md` is generated. In a new Codex Desktop session, say: "Please read H
 | Tool | Description |
 |------|-------------|
 | `collab_consult(ai, question)` | Consult the other AI's CLI |
+| `collab_consult_async(ai, question)` | Queue a consultation as a background job |
 | `collab_discuss(ai, topic)` | Multi-round discussion with the other AI's CLI |
+| `collab_discuss_async(ai, topic)` | Queue a discussion as a background job |
 | `collab_request_review(ai, focus?, scope?)` | Request a code review from the other AI |
+| `collab_request_review_async(ai, focus?, scope?)` | Queue a review request as a background job |
+| `collab_ai_job_status(job_id)` | Check async AI job status and result |
+| `collab_ai_job_list()` | List async AI jobs |
+| `collab_ai_job_cancel(job_id)` | Cancel a queued async AI job |
 | `collab_setup_cli(ai, command, ...)` | Customize CLI path and arguments |
 
 ### Maintenance
@@ -498,7 +510,7 @@ A `HANDOFF.md` is generated. In a new Codex Desktop session, say: "Please read H
 | `AI_STATE.lock` | Temporary lock file (auto-deleted after use) |
 | `cli_config.json` | CLI config (created only when `collab_setup_cli()` is called) |
 
-> All writes are contained within your project folder. Nothing is written to your home directory.
+> Project state is written inside your project folder. A small last-project marker is stored under your home directory so respawned Desktop MCP servers can reconnect.
 
 ---
 
@@ -511,6 +523,7 @@ collab_doctor()
 ```
 
 For common errors and recovery steps, see `docs/TROUBLESHOOTING.md` in the repository.
+For Japanese encoding issues, run `collab_encoding_report()` and see `docs/ENCODING.md`.
 
 ---
 

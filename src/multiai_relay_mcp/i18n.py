@@ -573,6 +573,10 @@ _STRINGS: dict[str, dict[str, str]] = {
         "import.err_path":       "エラー: input_path は絶対パスを指定してください。",
         "import.err_not_found":  "エラー: ファイルが見つかりません: {path}",
         "import.err_read":       "エラー: ファイルの読み込みに失敗しました: {err}",
+        "import.err_not_dict":   "エラー: インポートファイルのトップレベルはJSONオブジェクトである必要があります。",
+        "import.err_state_not_dict":"エラー: インポートファイル内の state はJSONオブジェクトである必要があります。",
+        "import.err_state_list":  "エラー: インポートファイル内の state.{field} はリストである必要があります。",
+        "import.err_state_item":  "エラー: インポートファイル内の state.{field}[{index}] はJSONオブジェクトである必要があります。",
         "import.err_no_checksum":"エラー: チェックサムが見つかりません。このファイルはエクスポートされたものではない可能性があります。",
         "import.err_checksum_mismatch": (
             "エラー: チェックサムが一致しません。ファイルが破損または改ざんされています。\n"
@@ -1161,6 +1165,10 @@ _STRINGS: dict[str, dict[str, str]] = {
         "import.err_path":       "Error: input_path must be an absolute path.",
         "import.err_not_found":  "Error: File not found: {path}",
         "import.err_read":       "Error: Failed to read file: {err}",
+        "import.err_not_dict":   "Error: Import file top level must be a JSON object.",
+        "import.err_state_not_dict":"Error: state in the import file must be a JSON object.",
+        "import.err_state_list":  "Error: state.{field} in the import file must be a list.",
+        "import.err_state_item":  "Error: state.{field}[{index}] in the import file must be a JSON object.",
         "import.err_no_checksum":"Error: No checksum found. This file may not have been created by collab_export_state.",
         "import.err_checksum_mismatch": (
             "Error: Checksum mismatch. The file may be corrupted or tampered with.\n"

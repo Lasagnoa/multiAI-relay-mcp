@@ -6,8 +6,8 @@ ClaudeとCodexが共通のツール群を通じて状態を共有するMCPサー
 プロジェクトの切り替えは collab_switch_project() ツールで行う。
 設定ファイル（config.toml / claude_desktop_config.json）は一度設定すれば変更不要。
 
-現在のプロジェクトはプロセスのメモリ内にのみ保持される（ファイル書き出しなし）。
-プロジェクトフォルダ外への書き込みは一切行わない。
+現在のプロジェクトはプロセスのメモリとユーザー領域の小さな復元用マーカーに保持される。
+状態本体の書き込みはプロジェクトフォルダ内に限定する。
 """
 
 import copy
@@ -15,12 +15,17 @@ import hashlib
 import re
 import json
 import datetime
+import locale
 import os
 import sys
 import tempfile
+import threading
 import time
+import uuid
 from collections import Counter
+from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
+from typing import Callable
 
 from mcp.server.fastmcp import FastMCP
 
@@ -82,6 +87,140 @@ mcp = FastMCP(
 
 #endregion
 
+
+def _next_numbered_id(prefix: str, items: list) -> str:
+    """Return the next monotonic ID for items with IDs like ``prefix-001``."""
+    numbers = [
+        int(item["id"].split("-")[-1])
+        for item in items
+        if isinstance(item, dict)
+        and isinstance(item.get("id"), str)
+        and item["id"].startswith(f"{prefix}-")
+        and item["id"].split("-")[-1].isdigit()
+    ]
+    return f"{prefix}-{max(numbers, default=0) + 1:03d}"
+
+
+def _env_int(name: str, default: int, minimum: int) -> int:
+    try:
+        return max(minimum, int(os.environ.get(name, str(default))))
+    except ValueError:
+        return default
+
+
+_AI_JOB_MAX_WORKERS = _env_int("MULTIAI_AI_JOB_WORKERS", 2, 1)
+_AI_JOB_MAX_HISTORY = _env_int("MULTIAI_AI_JOB_HISTORY", 100, 10)
+_AI_JOB_EXECUTOR = ThreadPoolExecutor(
+    max_workers=_AI_JOB_MAX_WORKERS,
+    thread_name_prefix="multiai-ai-job",
+)
+_AI_JOBS: dict[str, dict] = {}
+_AI_JOBS_LOCK = threading.Lock()
+
+
+def _job_public(job: dict, include_result: bool = True) -> dict:
+    """Return a copy of job metadata without the Future object."""
+    public = {k: v for k, v in job.items() if k != "future"}
+    if not include_result:
+        public.pop("result", None)
+        public.pop("error", None)
+    return public
+
+
+def _trim_ai_jobs_locked() -> None:
+    finished = [
+        (job.get("finished_at") or job.get("submitted_at") or "", job_id)
+        for job_id, job in _AI_JOBS.items()
+        if job.get("status") in {"succeeded", "failed", "cancelled"}
+    ]
+    finished.sort()
+    while len(_AI_JOBS) > _AI_JOB_MAX_HISTORY and finished:
+        _, job_id = finished.pop(0)
+        _AI_JOBS.pop(job_id, None)
+
+
+def _submit_ai_job(
+    kind: str,
+    ai: str,
+    summary: str,
+    project_path: str,
+    runner: Callable[[], str],
+) -> str:
+    job_id = f"ai-job-{datetime.datetime.now().strftime('%Y%m%d%H%M%S')}-{uuid.uuid4().hex[:8]}"
+    now = _now_iso()
+    with _AI_JOBS_LOCK:
+        _AI_JOBS[job_id] = {
+            "id": job_id,
+            "kind": kind,
+            "ai": ai,
+            "summary": summary,
+            "project_path": project_path,
+            "status": "queued",
+            "submitted_at": now,
+            "started_at": None,
+            "finished_at": None,
+            "result": None,
+            "error": None,
+        }
+
+    future = _AI_JOB_EXECUTOR.submit(_run_ai_job, job_id, runner)
+    with _AI_JOBS_LOCK:
+        if job_id in _AI_JOBS:
+            _AI_JOBS[job_id]["future"] = future
+            _trim_ai_jobs_locked()
+    return job_id
+
+
+def _run_ai_job(job_id: str, runner: Callable[[], str]) -> None:
+    with _AI_JOBS_LOCK:
+        job = _AI_JOBS.get(job_id)
+        if not job:
+            return
+        if job.get("status") == "cancelled":
+            return
+        job["status"] = "running"
+        job["started_at"] = _now_iso()
+    try:
+        result = runner()
+        status = "succeeded"
+        error = None
+    except Exception as e:
+        result = None
+        status = "failed"
+        error = str(e)
+
+    with _AI_JOBS_LOCK:
+        job = _AI_JOBS.get(job_id)
+        if not job:
+            return
+        job["status"] = status
+        job["result"] = result
+        job["error"] = error
+        job["finished_at"] = _now_iso()
+        _trim_ai_jobs_locked()
+
+
+def _format_ai_job(job: dict, include_result: bool = True) -> str:
+    lines = [
+        f"ジョブID: {job['id']}",
+        f"種別: {job['kind']}",
+        f"相手AI: {job['ai'].upper()}",
+        f"状態: {job['status']}",
+        f"プロジェクト: {job['project_path']}",
+        f"概要: {job['summary']}",
+        f"投入: {job['submitted_at']}",
+    ]
+    if job.get("started_at"):
+        lines.append(f"開始: {job['started_at']}")
+    if job.get("finished_at"):
+        lines.append(f"終了: {job['finished_at']}")
+    if job.get("error"):
+        lines += ["", f"エラー: {job['error']}"]
+    if include_result and job.get("result") is not None:
+        lines += ["", "結果:", job["result"]]
+    return "\n".join(lines)
+
+
 #region MCPツール — プロジェクト管理
 
 @mcp.tool()
@@ -90,7 +229,7 @@ def collab_switch_project(project_path: str, project_name: str = "") -> str:
     作業するプロジェクトを設定または新規作成する。
 
     セッション開始時に必ず呼び出すこと。
-    プロジェクトパスはメモリ内にのみ保持され、ファイルへの書き出しは行わない。
+    プロジェクトパスはプロセスメモリとユーザー領域の復元用マーカーに保持される。
 
     - AI_STATE.json が存在する場合: 既存状態を吸収して接続（巻き戻し後も安全）
     - AI_STATE.json が存在しない場合: project_name を指定すれば新規作成、なければエラー
@@ -148,9 +287,15 @@ def collab_switch_project(project_path: str, project_name: str = "") -> str:
 
     # 既存プロジェクトを吸収して接続（project_name は無視）
     state_mod.set_current_project(path)
-    # issue-022: BOM付きJSON(utf-8-sig)も透過的に読み込む
-    with open(state_file, "r", encoding="utf-8-sig") as f:
-        state = json.load(f)
+    # issue-022: BOM付きJSON(utf-8-sig)も透過的に読み込む。
+    # 破損・不正スキーマ時もMCP呼び出し自体は落とさず、復旧できるメッセージを返す。
+    try:
+        with open(state_file, "r", encoding="utf-8-sig") as f:
+            state = json.load(f)
+    except Exception as e:
+        return t("err.file_read", err=e)
+    if not isinstance(state, dict):
+        return t("load_state.not_dict", sf=state_file)
 
     absorbed = t("switch.absorbed_note") if project_name else ""
 
@@ -240,6 +385,117 @@ def collab_list_projects() -> str:
 #endregion
 
 #region MCPツール — 診断・情報
+
+_MOJIBAKE_PATTERNS = (
+    "繧", "縺", "譁", "蜊", "荳", "逕", "隱", "驥", "窶", "竊", "笏", "�",
+)
+
+
+def _console_code_pages() -> tuple[int | None, int | None]:
+    """Return Windows ANSI and console output code pages when available."""
+    if sys.platform != "win32":
+        return None, None
+    try:
+        import ctypes
+
+        kernel32 = ctypes.windll.kernel32
+        return int(kernel32.GetACP()), int(kernel32.GetConsoleOutputCP())
+    except Exception:
+        return None, None
+
+
+def _encoding_file_status(path: Path) -> str:
+    """Summarize whether a text file is valid UTF-8 and looks suspicious."""
+    if not path.exists():
+        return f"- {path.name}: なし"
+    try:
+        raw = path.read_bytes()
+    except OSError as e:
+        return f"- {path.name}: 読み取り失敗 ({e})"
+
+    bom = raw.startswith(b"\xef\xbb\xbf")
+    try:
+        text = raw[3:].decode("utf-8") if bom else raw.decode("utf-8")
+        utf8 = "OK"
+    except UnicodeDecodeError as e:
+        return f"- {path.name}: UTF-8 NG ({e})"
+
+    suspicious = sum(text.count(p) for p in _MOJIBAKE_PATTERNS)
+    suffix = " / BOMあり" if bom else ""
+    if suspicious:
+        suffix += f" / 文字化け疑い {suspicious} 箇所"
+    return f"- {path.name}: UTF-8 {utf8}{suffix}"
+
+
+@mcp.tool()
+def collab_encoding_report(project_path: str = '') -> str:
+    """
+    日本語文字化けの切り分け用レポートを返す。
+
+    ファイル自体がUTF-8として正常か、実行環境の表示/CLI入出力が怪しいかを確認する。
+    """
+    try:
+        with state_mod.project_context(project_path):
+            try:
+                proj = _get_project_dir()
+            except RuntimeError:
+                proj = None
+
+            acp, console_cp = _console_code_pages()
+            lines = [
+                "# 文字コード診断",
+                "",
+                "## MCPの方針",
+                "- 状態ファイル、引継ぎMarkdown、セッションログはUTF-8で保存します。",
+                "- JSON読み込みはUTF-8 BOM付きも受け入れます。",
+                "- Claude/Codex CLI呼び出し時は `PYTHONUTF8=1` と `PYTHONIOENCODING=utf-8` を子プロセスへ渡します。",
+                "- CLI出力はbytesで受け取り、UTF-8優先、必要時はOS既定エンコーディングにフォールバックして読みます。",
+                "",
+                "## 実行環境",
+                f"- Python: {sys.version.split()[0]}",
+                f"- filesystem encoding: {sys.getfilesystemencoding()}",
+                f"- preferred encoding: {locale.getpreferredencoding(False)}",
+                f"- stdout encoding: {getattr(sys.stdout, 'encoding', None)}",
+                f"- stderr encoding: {getattr(sys.stderr, 'encoding', None)}",
+                f"- Windows ANSI code page: {acp if acp is not None else 'N/A'}",
+                f"- Windows console output code page: {console_cp if console_cp is not None else 'N/A'}",
+                f"- PYTHONUTF8: {os.environ.get('PYTHONUTF8', '(未設定)')}",
+                f"- PYTHONIOENCODING: {os.environ.get('PYTHONIOENCODING', '(未設定)')}",
+                f"- LANG: {os.environ.get('LANG', '(未設定)')}",
+                f"- LC_ALL: {os.environ.get('LC_ALL', '(未設定)')}",
+                "",
+                "## プロジェクト",
+            ]
+
+            if proj is None:
+                lines.append("- 未設定。`collab_switch_project()` か `project_path` を指定してください。")
+            else:
+                lines.append(f"- path: {proj}")
+                lines.append("")
+                lines.append("## 主要ファイル")
+                targets = [
+                    proj / "AI_STATE.json",
+                    proj / "HANDOFF.md",
+                    proj / "cli_config.json",
+                ]
+                sessions = proj / "ai_sessions"
+                if sessions.exists():
+                    latest = sorted(sessions.glob("*.md"), reverse=True)
+                    if latest:
+                        targets.append(latest[0])
+                lines.extend(_encoding_file_status(p) for p in targets)
+
+            lines += [
+                "",
+                "## 見方",
+                "- ファイルが `UTF-8 OK` なのに画面だけ化ける場合は、保存データではなく表示側のコードページ問題です。",
+                "- `文字化け疑い` が出る場合は、すでに化けた文字列がファイルに保存されている可能性があります。",
+                "- Windowsのコンソール出力コードページが `65001` 以外でも、MCPのstdio通信自体はUTF-8で扱うのが安全です。",
+            ]
+            return "\n".join(lines)
+    except RuntimeError as _pp_e:
+        return t("err.runtime", msg=_pp_e)
+
 
 @mcp.tool()
 def collab_version(project_path: str = '') -> str:
@@ -740,7 +996,10 @@ def collab_set_task(title: str, description: str = "", project_path: str = '') -
                     old["completed_at"] = _now_iso()
                     state["completed_tasks"].append(old)
 
-                task_id = f"task-{len(state['completed_tasks']) + 1:03d}"
+                all_tasks = state.get("completed_tasks", [])
+                if state.get("current_task"):
+                    all_tasks = all_tasks + [state["current_task"]]
+                task_id = _next_numbered_id("task", all_tasks)
                 state["current_task"] = {
                     "id": task_id, "title": title, "description": description,
                     "started_at": _now_iso(), "started_by": state["current_ai"],
@@ -848,14 +1107,7 @@ def collab_record_issue(
             with _state_transaction() as state:
                 # 既存・解決済み両方のIDを参照して単調増加IDを採番
                 all_issues = state.get("known_issues", []) + state.get("resolved_issues", [])
-                issue_numbers = [
-                    int(iss["id"].split("-")[-1])
-                    for iss in all_issues
-                    if isinstance(iss, dict)
-                    and iss.get("id", "").startswith("issue-")
-                    and iss["id"].split("-")[-1].isdigit()
-                ]
-                issue_id = f"issue-{max(issue_numbers, default=0) + 1:03d}"
+                issue_id = _next_numbered_id("issue", all_issues)
                 state["known_issues"].append({
                     "id":            issue_id,
                     "text":          message,
@@ -986,11 +1238,6 @@ def collab_update_issue(
                     if err:
                         return err
 
-            # issue-014: 存在チェックを transaction 外で先に行う
-            pre = _load_state()
-            if not any(isinstance(i, dict) and i.get("id") == issue_id for i in pre.get("known_issues", [])):
-                return t("update_issue.not_found", id=issue_id)
-
             with _state_transaction() as state:
                 issue = next(
                     (i for i in state.get("known_issues", [])
@@ -998,7 +1245,23 @@ def collab_update_issue(
                     None,
                 )
                 if issue is None:
-                    return t("update_issue.not_found_inner", id=issue_id)
+                    return t("update_issue.not_found", id=issue_id)
+
+                current_tags = issue.get("tags", [])
+                if add_tags:
+                    new_tags = [tg for tg in add_tags if tg not in current_tags]
+                    combined = len(current_tags) + len(new_tags)
+                    if combined > _MAX_TAGS:
+                        return t("update_issue.err_tags_overflow",
+                                 max=_MAX_TAGS, combined=combined)
+
+                current_files = issue.get("related_files", [])
+                if add_related_files:
+                    new_files = [f for f in add_related_files if f not in current_files]
+                    combined = len(current_files) + len(new_files)
+                    if combined > _MAX_RELATED_FILES:
+                        return t("update_issue.err_files_overflow",
+                                 max=_MAX_RELATED_FILES, combined=combined)
 
                 if message is not None:
                     issue["text"] = message
@@ -1013,14 +1276,7 @@ def collab_update_issue(
                 if tags is not None:
                     issue["tags"] = tags
                 else:
-                    current_tags = issue.get("tags", [])
                     if add_tags:
-                        new_tags = [tg for tg in add_tags if tg not in current_tags]
-                        combined = len(current_tags) + len(new_tags)
-                        if combined > _MAX_TAGS:
-                            # サイレント切り捨てを防ぐためエラーを返す（last_updated のみ更新される）
-                            return t("update_issue.err_tags_overflow",
-                                     max=_MAX_TAGS, combined=combined)
                         issue["tags"] = current_tags + new_tags
                     if remove_tags:
                         issue["tags"] = [tg for tg in issue.get("tags", []) if tg not in remove_tags]
@@ -1029,14 +1285,7 @@ def collab_update_issue(
                 if related_files is not None:
                     issue["related_files"] = related_files
                 else:
-                    current_files = issue.get("related_files", [])
                     if add_related_files:
-                        new_files = [f for f in add_related_files if f not in current_files]
-                        combined = len(current_files) + len(new_files)
-                        if combined > _MAX_RELATED_FILES:
-                            # サイレント切り捨てを防ぐためエラーを返す
-                            return t("update_issue.err_files_overflow",
-                                     max=_MAX_RELATED_FILES, combined=combined)
                         issue["related_files"] = current_files + new_files
                     if remove_related_files:
                         issue["related_files"] = [f for f in issue.get("related_files", [])
@@ -1162,12 +1411,8 @@ def collab_add_pending_task(title: str, description: str = "", project_path: str
             if err:
                 return err
             with _state_transaction() as state:
-                task_numbers = [
-                    int(task["id"].split("-")[-1])
-                    for task in state.get("pending_tasks", []) + state.get("completed_pending_tasks", [])
-                    if task.get("id", "").startswith("pending-") and task["id"].split("-")[-1].isdigit()
-                ]
-                task_id = f"pending-{max(task_numbers, default=0) + 1:03d}"
+                all_pending = state.get("pending_tasks", []) + state.get("completed_pending_tasks", [])
+                task_id = _next_numbered_id("pending", all_pending)
                 state["pending_tasks"].append({
                     "id": task_id,
                     "title": title, "description": description,
@@ -1368,6 +1613,98 @@ def collab_checkpoint(message: str, to_ai: str = "", dry_run: bool = False, proj
 
 #region MCPツール — AI相談・議論
 
+
+def _save_consult_note(ai: str, question: str, response: str) -> bool:
+    try:
+        short_q = question[:60] + ("…" if len(question) > 60 else "")
+        with _state_transaction() as state:
+            state["notes"].append({
+                "timestamp": _now_iso(), "ai": state["current_ai"],
+                "text": t("consult.note_label", AI=ai.upper(), question=short_q),
+                "consult": {"question": question, "response": response},
+            })
+            caller_ai = state["current_ai"]
+        _append_session_log(caller_ai, t("consult.log", AI=ai.upper(), question=short_q))
+        return True
+    except Exception:
+        return False
+
+
+def _run_consult_job(ai: str, question: str, save_result: bool, project_path: str) -> str:
+    with state_mod.project_context(project_path):
+        response = _call_ai_cli(ai, _build_consult_prompt(question))
+        save_failed = save_result and not _save_consult_note(ai, question, response)
+        result = t("consult.result", AI=ai.upper(), response=response)
+        if save_failed:
+            result += t("consult.save_failed")
+        return result
+
+
+def _run_discuss_job(ai: str, topic: str, rounds: int, project_path: str) -> str:
+    with state_mod.project_context(project_path):
+        history: list[dict] = []
+        current_prompt = topic
+
+        for i in range(rounds):
+            context = _build_consult_prompt(current_prompt)
+            if history:
+                context += "\n\n---\n\n" + t("discuss.history_header") + "\n"
+                for h in history:
+                    context += f"\n**{h['speaker']}:** {h['text'][:400]}\n"
+            response = _call_ai_cli(ai, context)
+            history.append({"speaker": ai.upper(), "text": response})
+            if i + 1 < rounds:
+                current_prompt = t("discuss.followup", response=response[:600])
+
+        result_lines = [t("discuss.result_header", AI=ai.upper(), rounds=rounds), ""]
+        for j, h in enumerate(history, 1):
+            result_lines += [t("discuss.round_header", n=j, ai=h["speaker"]), "", h["text"], ""]
+        result = "\n".join(result_lines)
+
+        save_failed = False
+        try:
+            short_topic = topic[:60] + ("…" if len(topic) > 60 else "")
+            with _state_transaction() as state:
+                state["notes"].append({
+                    "timestamp": _now_iso(), "ai": state["current_ai"],
+                    "text": t("discuss.note_label", AI=ai.upper(), topic=short_topic),
+                    "discuss": {"topic": topic, "rounds": rounds, "history": history},
+                })
+                caller_ai = state["current_ai"]
+            _append_session_log(caller_ai, t("discuss.log", AI=ai.upper(), topic=short_topic))
+        except Exception:
+            save_failed = True
+
+        if save_failed:
+            result += t("discuss.save_failed")
+        return result
+
+
+def _run_request_review_job(ai: str, question: str, scope_text: str, save_result: bool, project_path: str) -> str:
+    with state_mod.project_context(project_path):
+        response = _call_ai_cli(ai, _build_consult_prompt(question))
+        save_failed = False
+
+        if save_result:
+            try:
+                label = t("request_review.note_label", AI=ai.upper(), scope=scope_text[:60])
+                with _state_transaction() as state:
+                    state["notes"].append({
+                        "timestamp": _now_iso(), "ai": state["current_ai"],
+                        "text":    label,
+                        "consult": {"question": question, "response": response},
+                    })
+                    caller_ai = state["current_ai"]
+                _append_session_log(caller_ai, t("request_review.log", AI=ai.upper(), scope=scope_text[:60]))
+            except Exception:
+                save_failed = True
+
+        result = t("request_review.result", AI=ai.upper(), response=response)
+        if save_failed:
+            result += t("request_review.save_failed")
+        return result
+
+
 @mcp.tool()
 def collab_consult(ai: str, question: str, save_result: bool = True, project_path: str = '') -> str:
     """
@@ -1410,6 +1747,37 @@ def collab_consult(ai: str, question: str, save_result: bool = True, project_pat
             if save_failed:
                 result += t("consult.save_failed")
             return result
+    except RuntimeError as _pp_e:
+        return t("err.runtime", msg=_pp_e)
+
+
+@mcp.tool()
+def collab_consult_async(ai: str, question: str, save_result: bool = True, project_path: str = '') -> str:
+    """
+    相手AIへの相談をバックグラウンドジョブとして投入する。
+
+    collab_ai_job_status(job_id) で結果を確認する。
+    """
+    try:
+        with state_mod.project_context(project_path):
+            if ai not in VALID_AI:
+                return t("err.invalid_ai")
+            err = _validate_input(question, "question")
+            if err:
+                return err
+            resolved_project = str(_get_project_dir())
+            short_q = question[:60] + ("…" if len(question) > 60 else "")
+            job_id = _submit_ai_job(
+                "consult",
+                ai,
+                short_q,
+                resolved_project,
+                lambda: _run_consult_job(ai, question, save_result, resolved_project),
+            )
+            return (
+                f"AI相談ジョブを投入しました: {job_id}\n"
+                f"状態確認: collab_ai_job_status(\"{job_id}\")"
+            )
     except RuntimeError as _pp_e:
         return t("err.runtime", msg=_pp_e)
 
@@ -1470,6 +1838,38 @@ def collab_discuss(ai: str, topic: str, rounds: int = 2, project_path: str = '')
             if save_failed:
                 result += t("discuss.save_failed")
             return result
+    except RuntimeError as _pp_e:
+        return t("err.runtime", msg=_pp_e)
+
+
+@mcp.tool()
+def collab_discuss_async(ai: str, topic: str, rounds: int = 2, project_path: str = '') -> str:
+    """
+    相手AIとの複数ラウンド議論をバックグラウンドジョブとして投入する。
+
+    collab_ai_job_status(job_id) で結果を確認する。
+    """
+    try:
+        with state_mod.project_context(project_path):
+            if ai not in VALID_AI:
+                return t("err.invalid_ai")
+            err = _validate_input(topic, "topic")
+            if err:
+                return err
+            rounds = min(max(rounds, 1), 4)
+            resolved_project = str(_get_project_dir())
+            short_topic = topic[:60] + ("…" if len(topic) > 60 else "")
+            job_id = _submit_ai_job(
+                "discuss",
+                ai,
+                f"{short_topic} ({rounds} rounds)",
+                resolved_project,
+                lambda: _run_discuss_job(ai, topic, rounds, resolved_project),
+            )
+            return (
+                f"AI議論ジョブを投入しました: {job_id}\n"
+                f"状態確認: collab_ai_job_status(\"{job_id}\")"
+            )
     except RuntimeError as _pp_e:
         return t("err.runtime", msg=_pp_e)
 
@@ -1811,6 +2211,104 @@ def collab_request_review(
 
 
 @mcp.tool()
+def collab_request_review_async(
+    ai:          str,
+    focus:       list[str] | None = None,
+    scope:       str = "",
+    save_result: bool = True,
+    project_path: str = '',
+) -> str:
+    """
+    相手AIへのレビュー依頼をバックグラウンドジョブとして投入する。
+
+    collab_ai_job_status(job_id) で結果を確認する。
+    """
+    try:
+        with state_mod.project_context(project_path):
+            if ai not in VALID_AI:
+                return t("err.invalid_ai")
+            if not isinstance(focus, list):
+                focus = []
+            focus_text = "・".join(focus) if focus else t("request_review.focus_default")
+            scope_text = scope or t("request_review.scope_default")
+            question = t("request_review.question", scope=scope_text, focus=focus_text)
+            err = _validate_input(question, "question")
+            if err:
+                return err
+            resolved_project = str(_get_project_dir())
+            summary = scope_text[:60] + ("…" if len(scope_text) > 60 else "")
+            job_id = _submit_ai_job(
+                "request_review",
+                ai,
+                summary,
+                resolved_project,
+                lambda: _run_request_review_job(ai, question, scope_text, save_result, resolved_project),
+            )
+            return (
+                f"AIレビュー依頼ジョブを投入しました: {job_id}\n"
+                f"状態確認: collab_ai_job_status(\"{job_id}\")"
+            )
+    except RuntimeError as _pp_e:
+        return t("err.runtime", msg=_pp_e)
+
+
+@mcp.tool()
+def collab_ai_job_status(job_id: str, include_result: bool = True) -> str:
+    """
+    非同期AIジョブの状態と結果を確認する。
+    """
+    with _AI_JOBS_LOCK:
+        job = _AI_JOBS.get(job_id)
+        if not job:
+            return f"AIジョブが見つかりません: {job_id}"
+        public = _job_public(job, include_result=include_result)
+    return _format_ai_job(public, include_result=include_result)
+
+
+@mcp.tool()
+def collab_ai_job_list(limit: int = 10, include_finished: bool = True) -> str:
+    """
+    非同期AIジョブの一覧を表示する。
+    """
+    limit = min(max(limit, 1), 50)
+    with _AI_JOBS_LOCK:
+        jobs = [_job_public(job, include_result=False) for job in _AI_JOBS.values()]
+    if not include_finished:
+        jobs = [job for job in jobs if job.get("status") not in {"succeeded", "failed", "cancelled"}]
+    jobs.sort(key=lambda job: job.get("submitted_at") or "", reverse=True)
+    jobs = jobs[:limit]
+    if not jobs:
+        return "AIジョブはありません。"
+    lines = [f"AIジョブ一覧（{len(jobs)}件）", ""]
+    for job in jobs:
+        lines.append(
+            f"- {job['id']} [{job['status']}] {job['kind']} -> {job['ai'].upper()} / {job['summary']}"
+        )
+    return "\n".join(lines)
+
+
+@mcp.tool()
+def collab_ai_job_cancel(job_id: str) -> str:
+    """
+    キュー中の非同期AIジョブをキャンセルする。
+
+    すでに実行中のCLIプロセスはこの方式では安全に停止できないため、完了/タイムアウトを待つ。
+    """
+    with _AI_JOBS_LOCK:
+        job = _AI_JOBS.get(job_id)
+        if not job:
+            return f"AIジョブが見つかりません: {job_id}"
+        if job.get("status") != "queued":
+            return f"このジョブはキャンセルできません: {job_id}（状態: {job.get('status')}）"
+        future = job.get("future")
+        if isinstance(future, Future):
+            future.cancel()
+        job["status"] = "cancelled"
+        job["finished_at"] = _now_iso()
+    return f"AIジョブをキャンセルしました: {job_id}"
+
+
+@mcp.tool()
 def collab_summary(project_path: str = '') -> str:
     """
     現在の状態をコンパクトな4行で表示する。
@@ -1937,6 +2435,11 @@ def collab_cleanup_history(
             # AI_STATE.lock によって AI_STATE.archive.json への並行書き込みを防ぐ（TOCTOU対策）
             with _state_transaction() as st:
                 # ロック取得後に対象を再確定する（外側の state との差分を吸収）
+                locked_notes_total = len(st.get("notes", []))
+                locked_tasks_total = len(st.get("completed_tasks", []))
+                notes_trim = max(0, locked_notes_total - keep_notes)
+                tasks_trim = max(0, locked_tasks_total - keep_completed_tasks)
+
                 archived_notes = st["notes"][:notes_trim]
                 archived_tasks = st["completed_tasks"][:tasks_trim]
 
@@ -1964,8 +2467,8 @@ def collab_cleanup_history(
 
             dest_note = t("cleanup_history.archive_note") if archive else t("cleanup_history.delete_note")
             return t("cleanup_history.done",
-                     notes=notes_total, notes_after=notes_total - notes_trim, notes_trim=notes_trim,
-                     tasks=tasks_total, tasks_after=tasks_total - tasks_trim, tasks_trim=tasks_trim,
+                     notes=locked_notes_total, notes_after=locked_notes_total - notes_trim, notes_trim=notes_trim,
+                     tasks=locked_tasks_total, tasks_after=locked_tasks_total - tasks_trim, tasks_trim=tasks_trim,
                      dest=dest_note)
     except RuntimeError as _pp_e:
         return t("err.runtime", msg=_pp_e)
@@ -2090,21 +2593,35 @@ def collab_import_state(
                     payload = json.load(f)
             except Exception as e:
                 return t("import.err_read", err=e)
+            if not isinstance(payload, dict):
+                return t("import.err_not_dict")
 
             # チェックサム検証
-            stored_checksum = payload.pop("checksum", None)
-            if stored_checksum is None:
+            stored_checksum = payload.get("checksum")
+            if not isinstance(stored_checksum, str) or not stored_checksum:
                 return t("import.err_no_checksum")
 
-            payload_json     = json.dumps(payload, ensure_ascii=False, sort_keys=True)
+            payload_for_checksum = dict(payload)
+            payload_for_checksum.pop("checksum", None)
+            payload_json     = json.dumps(payload_for_checksum, ensure_ascii=False, sort_keys=True)
             calc_checksum    = hashlib.sha256(payload_json.encode("utf-8")).hexdigest()
-            payload["checksum"] = stored_checksum  # 元に戻す（表示用）
 
             if calc_checksum != stored_checksum:
                 return t("import.err_checksum_mismatch",
                          stored=stored_checksum[:16], calc=calc_checksum[:16])
 
             imported_state = payload.get("state", {})
+            if not isinstance(imported_state, dict):
+                return t("import.err_state_not_dict")
+            for list_field in (
+                "notes", "key_decisions", "known_issues",
+                "completed_tasks", "pending_tasks", "completed_pending_tasks",
+            ):
+                if list_field in imported_state and not isinstance(imported_state[list_field], list):
+                    return t("import.err_state_list", field=list_field)
+                for idx, item in enumerate(imported_state.get(list_field, [])):
+                    if not isinstance(item, dict):
+                        return t("import.err_state_item", field=list_field, index=idx)
             _unknown       = t("import.unknown")
             exported_at    = payload.get("exported_at", _unknown)
             source_project = payload.get("source_project", _unknown)
@@ -2136,6 +2653,7 @@ def collab_import_state(
             with _state_transaction() as st:
                 if mode == "replace":
                     # 完全置換: インポート状態をそのまま使用する
+                    st.clear()
                     for key, val in imported_state.items():
                         st[key] = val
                 else:
@@ -2205,7 +2723,7 @@ def collab_set_handoff_template(preset: str = "full", project_path: str = '') ->
 
 #region エントリポイント
 
-_VERSION = "1.1.1"
+_VERSION = "1.1.3"
 
 # ヘルプテキスト（AIが読むことを想定して日本語で詳述）
 _HELP_TEXT = f"""\
@@ -2241,9 +2759,16 @@ MCPツール一覧（Claude Desktop / Codex Desktop から自動呼び出し）:
   collab_generate_handoff   引き継ぎ文書（HANDOFF.md）を生成する（dry_run オプションあり）
   collab_checkpoint         メモ追加と引き継ぎ文書生成を一度に行う（dry_run オプションあり）
   collab_consult            相手AIのCLIを呼び出して質問・相談する
+  collab_consult_async      相手AIへの相談をバックグラウンドジョブとして投入する
   collab_discuss            相手AIと複数ターンの議論を行う
+  collab_discuss_async      相手AIとの議論をバックグラウンドジョブとして投入する
   collab_request_review     相手AIにコードレビューを依頼する（consult の薄いラッパー）
+  collab_request_review_async 相手AIへのレビュー依頼をバックグラウンドジョブとして投入する
+  collab_ai_job_status      非同期AIジョブの状態と結果を確認する
+  collab_ai_job_list        非同期AIジョブの一覧を表示する
+  collab_ai_job_cancel      キュー中の非同期AIジョブをキャンセルする
   collab_setup_cli          AIのCLIパス・引数設定をカスタマイズする
+  collab_encoding_report    日本語文字化けの切り分け用レポートを表示する
   collab_version            MCPサーバーと実行環境のバージョン情報を返す
   collab_doctor             MCPサーバーと実行環境の健全性を診断する
   collab_timeline           プロジェクトの更新イベントを時系列で返す
@@ -2258,7 +2783,8 @@ MCPツール一覧（Claude Desktop / Codex Desktop から自動呼び出し）:
 プロジェクトの切り替え:
   Desktop アプリを再起動しなくても collab_switch_project() を呼ぶだけで
   作業対象プロジェクトを変更できます。
-  プロジェクトパスはプロセスのメモリ内にのみ保持され、ファイルには書き出しません。
+  プロジェクトパスはプロセスメモリとユーザー領域の復元用マーカーに保持されます。
+  AI_STATE.json などの状態本体はプロジェクトフォルダ内に保存されます。
 
 書き込み先ファイル（プロジェクトフォルダ内のみ）:
   AI_STATE.json    状態ファイル

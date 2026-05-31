@@ -1,6 +1,7 @@
 """CLI integration helpers for calling peer AI tools."""
 
 import json
+import locale
 import os
 import shutil
 import subprocess
@@ -19,6 +20,37 @@ from .state import (
 _NOISE_LINES: frozenset[str] = frozenset({
     "Reading additional input from stdin...",
 })
+
+
+def _unicode_env() -> dict[str, str]:
+    """Return an environment that nudges child CLIs toward UTF-8 text I/O."""
+    env = os.environ.copy()
+    env.setdefault("PYTHONUTF8", "1")
+    env.setdefault("PYTHONIOENCODING", "utf-8")
+    env.setdefault("LANG", "C.UTF-8")
+    env.setdefault("LC_ALL", "C.UTF-8")
+    return env
+
+
+def _decode_cli_bytes(data: bytes) -> str:
+    """Decode CLI output without losing Japanese text on Windows code page 932."""
+    if not data:
+        return ""
+
+    encodings = ["utf-8-sig"]
+    preferred = locale.getpreferredencoding(False)
+    for enc in (preferred, "cp932", "utf-8"):
+        if enc and enc.lower() not in {e.lower() for e in encodings}:
+            encodings.append(enc)
+
+    for enc in encodings:
+        try:
+            return data.decode(enc)
+        except UnicodeDecodeError:
+            continue
+        except LookupError:
+            continue
+    return data.decode("utf-8", errors="replace")
 
 
 def _cli_config_file() -> Path:
@@ -85,17 +117,19 @@ def _call_ai_cli(ai: str, prompt: str, timeout: int = 180) -> str:
 
     try:
         result = subprocess.run(
-            cmd, capture_output=True, text=True,
+            cmd, capture_output=True, text=False,
             stdin=subprocess.DEVNULL,  # MCP stdio パイプが stdin に流れ込んでブロックするのを防ぐ
             cwd=cwd,  # プロジェクトディレクトリで実行（git repo チェック対応）
-            timeout=timeout, encoding="utf-8", errors="replace",
+            timeout=timeout, env=_unicode_env(),
         )
+        stdout = _decode_cli_bytes(result.stdout)
+        stderr = _decode_cli_bytes(result.stderr)
         # ノイズ行を除去してから応答テキストを構築
         cleaned_lines = [
-            line for line in result.stdout.splitlines()
+            line for line in stdout.splitlines()
             if line.strip() not in _NOISE_LINES
         ]
-        response = "\n".join(cleaned_lines).strip() or result.stderr.strip()
+        response = "\n".join(cleaned_lines).strip() or stderr.strip()
         if not response:
             # 応答が空の場合は対話TUIが起動した可能性がある
             return t("cli.no_response", AI=ai.upper(), ai=ai)
