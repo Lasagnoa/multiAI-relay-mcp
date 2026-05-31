@@ -135,6 +135,7 @@ _STRINGS: dict[str, dict[str, str]] = {
         "validate.files.absolute":     "エラー: related_files には相対パスを指定してください（絶対パス不可）: {fp!r}",
 
         # ── _validate_input ───────────────────────────────────────────────
+        "validate.input.not_str":  "エラー: {field} は文字列で指定してください。",
         "validate.input.too_long": "エラー: {field}が長すぎます（最大{max}文字、現在{count}文字）。",
         "validate.input.injection":"エラー: {field}に使用できない文字列が含まれています。",
 
@@ -464,6 +465,7 @@ _STRINGS: dict[str, dict[str, str]] = {
             "エラー: command に設定できるのは 'claude' または 'codex' の実行ファイルのみです。\n"
             "指定値: {cmd}（ファイル名: {stem}）"
         ),
+        "setup_cli.err_args":     "エラー: {field} は文字列のリストで指定してください。",
         "setup_cli.path_ok":      "見つかりました: {path}",
         "setup_cli.path_missing": "⚠ 見つかりません。パスを確認してください。",
         "setup_cli.done": (
@@ -728,6 +730,7 @@ _STRINGS: dict[str, dict[str, str]] = {
         "validate.files.absolute":     "Error: related_files must use relative paths (absolute paths are not allowed): {fp!r}",
 
         # ── _validate_input ───────────────────────────────────────────────
+        "validate.input.not_str":  "Error: {field} must be a string.",
         "validate.input.too_long": "Error: {field} is too long (max {max} characters, current: {count}).",
         "validate.input.injection":"Error: {field} contains an invalid character sequence.",
 
@@ -1057,6 +1060,7 @@ _STRINGS: dict[str, dict[str, str]] = {
             "Error: command must be a 'claude' or 'codex' executable.\n"
             "Specified: {cmd} (filename: {stem})"
         ),
+        "setup_cli.err_args":     "Error: {field} must be a list of strings.",
         "setup_cli.path_ok":      "found: {path}",
         "setup_cli.path_missing": "⚠ not found. Please verify the path.",
         "setup_cli.done": (

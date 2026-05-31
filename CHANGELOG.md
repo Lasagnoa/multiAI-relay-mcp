@@ -2,6 +2,28 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.1.5] - 2026-06-01
+
+### Fixed
+
+- Harden tool input validation for non-string JSON values. Text fields now return
+  user-facing validation errors instead of leaking `TypeError` from internal
+  `len()` or regex checks.
+- Validate `collab_setup_cli()` `args_before` / `args_after` before writing
+  `cli_config.json`, preventing malformed CLI argument lists from corrupting
+  future AI CLI calls.
+
+### Changed
+
+- Clarify the active-project recovery behavior in README, troubleshooting docs,
+  and `--help`: the last selected project is persisted in a small user-local
+  marker and may be restored after Desktop respawns the MCP server.
+
+### Tests
+
+- Restore a local `unittest` validation suite covering malformed MCP input and
+  `collab_setup_cli()` config-write safety.
+
 ## [1.1.4] - 2026-05-31
 
 ### Fixed

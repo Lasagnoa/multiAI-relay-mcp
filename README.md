@@ -16,10 +16,12 @@ Claude Desktop と Codex Desktop が MCP を通じて状態を共有し、セッ
 - 🌿 **Git 統合** — `collab_status` / `collab_switch_project` でブランチ名と最新コミットを自動表示
 - 🔤 **日本語文字コード診断** — `collab_encoding_report()` でUTF-8保存・表示コードページ・CLI入出力を切り分け
 - 🛡️ **stdio 安定化** — v1.1.4 以降、Git 情報取得の子プロセスは MCP stdio 入力を継承せず、Windows でも `collab_status` / `collab_switch_project` が詰まりにくい
+- 🧪 **堅牢な入力検証** — v1.1.5 以降、異常なJSON入力でもMCPサーバー例外や不正な `cli_config.json` 保存を防止
 - 📦 **プロジェクト外への書き込みを最小化** — 状態本体はプロジェクト内、直近プロジェクト情報のみホーム配下に保存
 
 > **設計上の制約:** MCP サーバーは Desktop アプリごとに独立したプロセスとして起動されます。  
 > **1 プロセス = 1 セッションデフォルトプロジェクト** です。`collab_switch_project()` でセッション既定を設定し、個別ツール呼び出しでは `project_path=` で別プロジェクトを一時指定できます。  
+> 直近のプロジェクトは `~/.multiai_current_project.json` にも保存され、Desktop再起動後に復元されることがあります。複数プロジェクトを扱う場合、書き込み前に `collab_switch_project()` または `project_path=` で対象を明示してください。  
 > 詳細・復旧手順 → リポジトリ内 `docs/TROUBLESHOOTING.md` を参照
 > 日本語文字化け対策 → リポジトリ内 `docs/ENCODING.md` を参照
 
@@ -45,7 +47,7 @@ Claude Desktop と Codex Desktop が MCP を通じて状態を共有し、セッ
 
 > `uvx` のフルパスが必要な場合は `where uvx`（Windows）または `which uvx`（Mac/Linux）で確認。  
 > 追加後は Claude Desktop を再起動。
-> 特定バージョンで固定したい場合は `args` を `["--from", "multiai-relay-mcp==1.1.4", "multiai-relay-mcp"]` のように指定できます。
+> 特定バージョンで固定したい場合は `args` を `["--from", "multiai-relay-mcp==1.1.5", "multiai-relay-mcp"]` のように指定できます。
 
 ### 2. Codex Desktop の設定
 
@@ -58,7 +60,7 @@ args = ['multiai-relay-mcp']
 ```
 
 > 追加後は Codex Desktop を再起動。
-> 特定バージョンで固定したい場合は `args = ['--from', 'multiai-relay-mcp==1.1.4', 'multiai-relay-mcp']` のように指定できます。
+> 特定バージョンで固定したい場合は `args = ['--from', 'multiai-relay-mcp==1.1.5', 'multiai-relay-mcp']` のように指定できます。
 
 ### 開発版（TestPyPI）を使う場合
 
@@ -82,7 +84,7 @@ args = ['--index-url', 'https://test.pypi.org/simple/', '--extra-index-url', 'ht
 2. Desktop を再起動
 3. `collab_version()` でバージョンを確認
 
-v1.1.4 は Windows の stdio MCP 環境で `collab_switch_project()` / `collab_status()` が Git 情報取得時にタイムアウトする問題を修正しています。該当症状がある場合は、キャッシュクリア後に必ず Desktop アプリを再起動してください。
+v1.1.5 は v1.1.4 の stdio/Gitタイムアウト修正に加え、ツール入力検証と `collab_setup_cli()` の設定保存安全性を強化しています。該当症状がある場合は、キャッシュクリア後に必ず Desktop アプリを再起動してください。
 
 ### 英語モードを有効にする（オプション）
 
@@ -284,10 +286,12 @@ A collaborative development system that lets Claude Desktop and Codex Desktop sh
 - 🌿 **Git Integration** — `collab_status` / `collab_switch_project` automatically show branch name and latest commit
 - 🛡️ **stdio hardening** — Since v1.1.4, Git metadata subprocesses do not inherit the MCP stdio input pipe, avoiding `collab_status` / `collab_switch_project` stalls on Windows
 - 🔤 **Japanese encoding diagnostics** — `collab_encoding_report()` helps diagnose UTF-8 file, console code page, and CLI I/O issues
+- 🧪 **Robust input validation** — Since v1.1.5, malformed JSON inputs no longer leak MCP server exceptions or corrupt `cli_config.json`
 - 📦 **Minimal writes outside project folder** — Project state stays in the project folder; only a small last-project marker is kept under the user home directory
 
 > **Design constraint:** The MCP server runs as a separate process per Desktop app.  
 > **1 process = 1 session-default project.** Use `collab_switch_project()` to set the session default. For individual calls targeting a different project, pass `project_path=` to any tool — the session default stays unchanged.
+> The last selected project is also saved in `~/.multiai_current_project.json` and may be restored after Desktop respawns the MCP server. When working across several projects, explicitly call `collab_switch_project()` or pass `project_path=` before write operations.
 
 ---
 
@@ -312,7 +316,7 @@ Add to `%APPDATA%\Claude\claude_desktop_config.json` (Windows) or `~/Library/App
 
 > Use `where uvx` (Windows) or `which uvx` (Mac/Linux) to find the full path if needed.  
 > Restart Claude Desktop after editing.
-> To pin a specific release, use `["--from", "multiai-relay-mcp==1.1.4", "multiai-relay-mcp"]` for `args`.
+> To pin a specific release, use `["--from", "multiai-relay-mcp==1.1.5", "multiai-relay-mcp"]` for `args`.
 
 ### 2. Codex Desktop configuration
 
@@ -325,7 +329,7 @@ args = ['multiai-relay-mcp']
 ```
 
 > Restart Codex Desktop after editing.
-> To pin a specific release, use `args = ['--from', 'multiai-relay-mcp==1.1.4', 'multiai-relay-mcp']`.
+> To pin a specific release, use `args = ['--from', 'multiai-relay-mcp==1.1.5', 'multiai-relay-mcp']`.
 
 ### Using the development version (TestPyPI)
 
@@ -349,7 +353,7 @@ args = ['--index-url', 'https://test.pypi.org/simple/', '--extra-index-url', 'ht
 2. Restart Desktop apps
 3. Confirm with `collab_version()`
 
-v1.1.4 fixes a Windows stdio MCP timeout where `collab_switch_project()` / `collab_status()` could stall while probing Git metadata. If you saw that symptom, clear the uv cache and restart the Desktop app so the new server process is launched.
+v1.1.5 includes the v1.1.4 Windows stdio/Git timeout fix and also hardens tool input validation and `collab_setup_cli()` config writes. If you saw those symptoms, clear the uv cache and restart the Desktop app so the new server process is launched.
 
 ### Enabling English mode (optional)
 

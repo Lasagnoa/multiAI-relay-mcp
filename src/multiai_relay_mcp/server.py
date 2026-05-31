@@ -221,6 +221,17 @@ def _format_ai_job(job: dict, include_result: bool = True) -> str:
     return "\n".join(lines)
 
 
+def _validate_cli_args(value: object, field: str) -> str | None:
+    """Validate CLI arg lists before writing cli_config.json."""
+    if not isinstance(value, list) or any(not isinstance(item, str) for item in value):
+        return t("setup_cli.err_args", field=field)
+    for i, item in enumerate(value):
+        err = _validate_input(item, f"{field}[{i}]")
+        if err:
+            return err
+    return None
+
+
 #region MCPツール — プロジェクト管理
 
 @mcp.tool()
@@ -1095,6 +1106,8 @@ def collab_record_issue(
             err = (_validate_input(message, "message")
                    or (severity not in VALID_SEVERITIES
                        and t("record_issue.err_severity", valid=VALID_SEVERITIES))
+                   or (not isinstance(category, str)
+                       and t("validate.input.not_str", field="category"))
                    or (not _SLUG_RE.match(category)
                        and t("record_issue.err_category_slug", cat=category))
                    or (len(category) > _MAX_CATEGORY_LEN
@@ -1219,6 +1232,8 @@ def collab_update_issue(
             if severity is not None and severity not in VALID_SEVERITIES:
                 return t("update_issue.err_severity", valid=VALID_SEVERITIES)
             if category is not None:
+                if not isinstance(category, str):
+                    return t("validate.input.not_str", field="category")
                 if not _SLUG_RE.match(category):
                     return t("update_issue.err_category_slug", cat=category)
                 if len(category) > _MAX_CATEGORY_LEN:
@@ -1898,16 +1913,23 @@ def collab_setup_cli(
             if ai not in VALID_AI:
                 return t("err.invalid_ai")
 
+            err = _validate_input(command, "command")
+            if err:
+                return err
+
             # command の検証: ファイル名のステム（拡張子なし）が VALID_AI に含まれるもののみ許可
             cmd_stem = Path(command).stem.lower()
             if cmd_stem not in VALID_AI:
                 return t("setup_cli.err_cmd", cmd=command, stem=cmd_stem)
 
             # None デフォルトを空リストに正規化
-            if not isinstance(args_before, list):
+            if args_before is None:
                 args_before = []
-            if not isinstance(args_after, list):
+            if args_after is None:
                 args_after = []
+            err = _validate_cli_args(args_before, "args_before") or _validate_cli_args(args_after, "args_after")
+            if err:
+                return err
 
             cfg_file = _cli_config_file()
             config = {}
@@ -2723,7 +2745,7 @@ def collab_set_handoff_template(preset: str = "full", project_path: str = '') ->
 
 #region エントリポイント
 
-_VERSION = "1.1.4"
+_VERSION = "1.1.5"
 
 # ヘルプテキスト（AIが読むことを想定して日本語で詳述）
 _HELP_TEXT = f"""\
@@ -2790,6 +2812,11 @@ MCPツール一覧（Claude Desktop / Codex Desktop から自動呼び出し）:
   AI_STATE.json などの状態本体はプロジェクトフォルダ内に保存されます。
   v1.1.4以降、Git情報取得用の子プロセスはMCP stdio入力を継承しないため、
   collab_switch_project() / collab_status() のGit連携はstdio環境でも安全に動作します。
+  v1.1.5以降、ツール入力の型検証を強化し、異常なJSON入力でもMCPサーバー例外や
+  不正な cli_config.json 保存が起きにくくなりました。
+  直近のプロジェクトはユーザー領域の小さな復元用マーカーにも保存されるため、
+  再起動後も復元されることがあります。複数プロジェクトを扱う場合は、
+  書き込み前に collab_switch_project() または project_path= で対象を明示してください。
 
 書き込み先ファイル（プロジェクトフォルダ内のみ）:
   AI_STATE.json    状態ファイル

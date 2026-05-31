@@ -289,6 +289,8 @@ def _validate_input(text: str, field: str = "input", max_len: int = _MAX_INPUT_L
     入力文字列の長さとインジェクションタグを検証する。
     問題があればエラーメッセージを返し、問題なければ None を返す。
     """
+    if not isinstance(text, str):
+        return t("validate.input.not_str", field=field)
     if len(text) > max_len:
         return t("validate.input.too_long", field=field, max=max_len, count=len(text))
     if _INJECTION_TAG in text:

@@ -11,11 +11,13 @@
 **制限の内容:**  
 MCP サーバーは Desktop アプリごとに独立したプロセスとして起動されます。  
 `collab_switch_project()` はプロセス内のセッションデフォルトを変更します。
+v1.1.2 以降は、最後に選択したプロジェクトを `~/.multiai_current_project.json` にも保存し、Desktop 側が MCP サーバーを再起動した後に復元できるようにしています。
 
 | 状況 | 問題 |
 |------|------|
 | Claude Desktop の同じウィンドウで別プロジェクトに切り替えた | `collab_switch_project()` を呼ぶと、それ以降の全呼び出しが新プロジェクトを参照する |
 | 複数チャットで同じ Desktop を共有している | どちらかの `collab_switch_project()` がプロセス全体に影響する |
+| 再起動後に `collab_switch_project()` を呼ばなかった | 直近プロジェクトが復元される場合があり、意図しないプロジェクトに書き込む可能性がある |
 
 **v1.0.21 以降の推奨解決策（`project_path` パラメータ）:**
 
@@ -37,6 +39,7 @@ collab_add_note("B専用メモ", project_path="D:\\projects\\ProjectB")
 
 **旧来の回避策（同一ウィンドウで切り替える場合）:**  
 各ツール呼び出しの前に `collab_switch_project()` で明示的に切り替えてください。
+書き込み系ツールでは、対象が少しでも曖昧なら `project_path=` を指定するのが安全です。
 
 ---
 
@@ -185,7 +188,7 @@ uv cache clean multiai-relay-mcp --force
 
 **症状:** `現在のプロジェクトが設定されていません`
 
-**原因:** セッション開始時に `collab_switch_project()` を呼んでいない（プロジェクトパスはメモリ内にのみ保持され、再起動でリセットされる）。
+**原因:** セッション開始時に `collab_switch_project()` を呼んでおらず、cwd・直近プロジェクト復元・プロジェクトレジストリからも有効な `AI_STATE.json` を見つけられない。
 
 **対処:**
 
@@ -193,7 +196,17 @@ uv cache clean multiai-relay-mcp --force
 collab_switch_project("D:\\path\\to\\project")
 ```
 
-セッション開始時に毎回呼ぶ必要があります。
+セッション開始時に毎回呼ぶのが最も安全です。v1.1.2以降は直近プロジェクトが復元される場合もありますが、複数プロジェクトを扱うときは復元に頼らず明示してください。
+
+---
+
+### 3-8. 不正なツール引数で TypeError が出る / cli_config.json が壊れる
+
+**症状:** `collab_add_note(message=123)` のような型違い入力や、`collab_setup_cli(args_before=["exec", 123])` のような設定でMCPサーバー例外が出る。または `cli_config.json` に文字列以外の引数が保存される。
+
+**原因:** v1.1.4以前では一部ツールの入力型検証が不足していました。
+
+**対処:** v1.1.5以降へ更新してください。v1.1.5では、文字列フィールドと `collab_setup_cli()` の引数リストを保存前に検証します。
 
 ---
 
